@@ -1,10 +1,9 @@
 # SPA Python
 
 SPA Python is a desktop app for Speech Pause Analysis of WAV recordings. It was
-ported from the original MATLAB SPA workflow and redesigned as a guided wizard
-for research assistants.
+ported from the original MATLAB SPA workflow and redesigned as a guided GUI.
 
-The app lets an RA:
+The app lets you:
 
 - choose SPA settings once per session;
 - load one WAV, multiple WAVs, or a folder of WAV files;
@@ -64,12 +63,6 @@ Optional folder smoke check:
 python tools/check_audio_folder.py /path/to/audio_folder
 ```
 
-Optional MATLAB parity workflow:
-
-```bash
-tools/run_matlab_reference.sh reports/audio_check_<timestamp>.csv reports/matlab_reference.csv
-python tools/compare_matlab_python.py reports/audio_check_<timestamp>.csv reports/matlab_reference.csv
-```
 
 More detail is in [docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md).
 
@@ -84,13 +77,6 @@ Included in the Python app:
 - automatic CSV and JSON metadata output;
 - saved-output review and rerun support.
 
-Not included from the old MATLAB GUI:
-
-- variable/iteration GUI modes;
-- Spectrum/tagging workflow;
-- manual segmentation workflow;
-- FFT GUI;
-- recording GUI.
 
 ## Data Safety
 

@@ -79,7 +79,7 @@ For automatic thresholding:
 2. Click the start and end of a noise-only pause.
 3. Adjust Noise start and Noise end with the sliders or time fields.
 
-If Analyze full file is off:
+If Analyze full file is offn(default):
 
 1. Click Select Analysis Boundaries.
 2. Click the start and end of the full section to analyze.
@@ -163,7 +163,7 @@ segmentation and QC selections.
 
 Noise region includes speech:
 The threshold can become too high or unstable. Go back and choose a quieter
-pause.
+pause. This can be checked by looking at the SPA output before QC.
 
 Analysis region starts too early or ends too late:
 Leading or trailing pauses may be included. This is allowed, and those pauses
