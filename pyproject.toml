@@ -1,0 +1,9 @@
+[project]
+name = "spa-python"
+version = "0.1.0"
+description = "Python port of the core MATLAB Speech Pause Analysis workflow"
+requires-python = ">=3.9"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

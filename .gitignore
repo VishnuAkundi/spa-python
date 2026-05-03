@@ -1,0 +1,33 @@
+# Python environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local GUI/runtime caches
+.matplotlib/
+
+# OS/editor files
+.DS_Store
+.vscode/
+.idea/
+
+# Lab audio and generated outputs
+audio/
+*.wav
+*.WAV
+*.wave
+*.WAVE
+*.mp3
+*.flac
+outputs/
+spa_outputs/
+reports/
+*.xlsx
+*_segments.csv
+*_segments_meta.json
+*_seg*.wav
