@@ -12,7 +12,8 @@ spa_app/main_window.py
   Wizard interface, playback controls, saved-output resume behavior, QC audit UI.
 
 spa_core/audio.py
-  WAV reading/writing, bit-depth handling, mono conversion, playback.
+  Audio reading/writing, ffprobe/ffmpeg fallback decoding, bit-depth handling,
+  mono conversion, playback.
 
 spa_core/processing.py
   MATLAB-equivalent preprocessing:
@@ -53,6 +54,12 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
+Install FFmpeg for non-WAV media and misnamed files:
+
+```bash
+brew install ffmpeg
+```
+
 ## Checks Before Pushing
 
 ```bash
@@ -84,6 +91,9 @@ python tools/check_audio_folder.py /path/to/audio_folder --variant both
 
 Reports are written to `reports/`, which is ignored by git.
 
+The folder checker uses `ffprobe` to decide whether a file has an audio stream.
+It does not trust the extension.
+
 ## MATLAB Parity
 
 The MATLAB parity helpers compare summary-level outputs from Python and MATLAB.
@@ -110,7 +120,7 @@ When recording parity results, summarize:
 
 Do not commit:
 
-- WAV files or other audio;
+- audio/media files;
 - participant data;
 - `spa_outputs/`;
 - `outputs/`;

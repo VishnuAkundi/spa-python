@@ -16,10 +16,23 @@ If imports fail, reinstall dependencies:
 pip install -r requirements.txt
 ```
 
-## WAV Files Are Not Showing
+## Audio Files Are Not Showing
 
-The file picker filters for `.wav` and `.WAV`. If a file has a different audio
-extension, convert it to WAV first.
+Folder mode uses `ffprobe` to find files with an audio stream. If files are not
+showing, install FFmpeg and restart the app:
+
+```bash
+brew install ffmpeg
+```
+
+The file picker also has an All files option if a file has an unusual extension.
+
+## A File Named `.wav` Will Not Open
+
+Some recording systems create WebM, MP4, or another container but save it with a
+`.wav` name. SPA Python can open these only if FFmpeg is installed. The app uses
+`ffprobe` to inspect the real file contents and `ffmpeg` to decode the first
+audio stream.
 
 ## Playback Does Not Work
 

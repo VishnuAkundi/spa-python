@@ -13,17 +13,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from spa_core.audio import read_wav
+from spa_core.audio import iter_audio_files, read_wav
 from spa_core.models import SpaSettings
 from spa_core.segmentation import run_spa
 
 
 def wav_files(audio_dir: Path) -> list[Path]:
-    return sorted(
-        path
-        for path in audio_dir.rglob("*")
-        if path.is_file() and path.suffix.lower() in {".wav", ".wave"}
-    )
+    return iter_audio_files(audio_dir)
 
 
 def quietest_region(signal, window_seconds: float = 0.5, search_seconds: float = 10.0) -> tuple[int, int]:
@@ -177,7 +173,7 @@ def write_report(rows: list[dict[str, object]], errors: list[dict[str, str]], ou
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run SPA Python over a folder of WAV files and record errors.")
+    parser = argparse.ArgumentParser(description="Run SPA Python over a folder of audio/media files and record errors.")
     parser.add_argument("audio_dir", type=Path)
     parser.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "reports")
     parser.add_argument("--limit", type=int, default=0)

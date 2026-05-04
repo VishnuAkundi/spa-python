@@ -1,7 +1,7 @@
 # SPA Python User Guide
 
 This guide is for research assistants using SPA Python to review Bamboo Passage
-WAV files.
+audio files.
 
 ## 1. Install Once
 
@@ -13,6 +13,13 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
+```
+
+If you need to open WebM, MP4, M4A, MP3, or files that are named `.wav` but are
+not actually WAV internally, install FFmpeg:
+
+```bash
+brew install ffmpeg
 ```
 
 After the first setup, you only need to activate the environment and start the
@@ -34,7 +41,7 @@ Recommended defaults:
 - SD multiplier: `3`
 - Speech minimum: `25 ms`
 - Pause minimum: `250 ms`
-- Analyze full file: off unless the protocol says to analyze the entire WAV
+- Analyze full file: off unless the protocol says to analyze the entire file
 
 Use the Settings button in the top right if you need to change these later.
 Changing settings for a loaded file sends you back to the boundary-selection
@@ -44,9 +51,9 @@ step so SPA can be rerun.
 
 Use one of these buttons:
 
-- Select WAV: load one file.
-- Select Multiple WAVs: choose a manual batch.
-- Select Folder: queue every `.wav` or `.wave` file inside a folder.
+- Select Audio File: load one file.
+- Select Multiple Audio Files: choose a manual batch.
+- Select Folder: queue every file with a readable audio stream inside a folder.
 
 The app chooses an output folder automatically:
 
@@ -79,7 +86,7 @@ For automatic thresholding:
 2. Click the start and end of a noise-only pause.
 3. Adjust Noise start and Noise end with the sliders or time fields.
 
-If Analyze full file is offn(default):
+If Analyze full file is off by default:
 
 1. Click Select Analysis Boundaries.
 2. Click the start and end of the full section to analyze.
@@ -158,6 +165,16 @@ After saving:
 
 You can reopen any done file from the Load Audio page to inspect saved
 segmentation and QC selections.
+
+## Supported Inputs
+
+The app tries normal WAV reading first. If that fails, it uses `ffprobe` to find
+the first audio stream and `ffmpeg` to decode that stream. This means a file can
+still open even when its extension is misleading, such as a WebM recording named
+`.wav`.
+
+Folder mode also uses `ffprobe`, so it does not rely only on file extensions.
+Non-audio files are skipped.
 
 ## Common Mistakes
 

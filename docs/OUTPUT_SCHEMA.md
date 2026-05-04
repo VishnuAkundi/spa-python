@@ -1,12 +1,12 @@
 # Output Schema
 
-SPA Python writes one CSV per WAV file:
+SPA Python writes one CSV per processed audio/media file:
 
 ```text
 <output folder>/<file_stem>_segments.csv
 ```
 
-It also writes one metadata JSON per WAV file:
+It also writes one metadata JSON per processed file:
 
 ```text
 <output folder>/metadata_json/<file_stem>_segments_meta.json
@@ -18,13 +18,13 @@ Rows are chronological and include both speech and pause segments.
 
 | Column | Meaning |
 | --- | --- |
-| `file_name` | WAV file name only. |
-| `source_path` | Full path to the source WAV used for review. |
+| `file_name` | Source file name only. |
+| `source_path` | Full path to the source file used for review. |
 | `segment_number` | Chronological segment number within the file. |
 | `segment_type` | `speech` or `pause`. |
 | `pause_position` | `leading`, `trailing`, `leading_trailing`, or `0`. Only pause rows can be flagged. |
-| `onset_seconds_absolute` | Segment onset in seconds from the beginning of the original WAV. |
-| `offset_seconds_absolute` | Segment offset in seconds from the beginning of the original WAV. |
+| `onset_seconds_absolute` | Segment onset in seconds from the beginning of the original source file. |
+| `offset_seconds_absolute` | Segment offset in seconds from the beginning of the original source file. |
 | `duration_seconds` | Segment duration in seconds. |
 | `audit_json` | JSON object containing selected QC effects. |
 

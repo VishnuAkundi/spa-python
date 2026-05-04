@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
+import subprocess
 
 import numpy as np
 from scipy.io import wavfile
 
-from spa_core.audio import read_wav
+from spa_core.audio import has_audio_stream, iter_audio_files, read_wav
 from spa_core.export import SEGMENT_AUDIT_COLUMNS, export_excel, segment_audit_frame
 from spa_core.models import SpaSettings
 from spa_core.processing import amplitude_envelope
@@ -95,6 +97,35 @@ def test_run_spa_detects_synthetic_speech_and_pause(tmp_path):
     assert len(result.speech_matrix) >= 2
     assert len(result.pause_matrix) >= 1
     assert result.total_matrix.iloc[0]["Speech_events"] == len(result.speech_matrix)
+
+
+def test_read_wav_falls_back_to_ffmpeg_for_misnamed_webm(tmp_path):
+    if shutil.which("ffmpeg") is None or shutil.which("ffprobe") is None:
+        return
+    path, _ = _synthetic_wav(tmp_path)
+    misnamed = tmp_path / "misnamed_webm.wav"
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-v",
+            "error",
+            "-i",
+            str(path),
+            "-c:a",
+            "libopus",
+            "-f",
+            "webm",
+            str(misnamed),
+        ],
+        check=True,
+    )
+    signal = read_wav(misnamed)
+    assert signal.raw_audio.size > 0
+    assert signal.sample_rate > 60
+    assert signal.normalized_envelope.shape == signal.raw_audio.shape
+    assert has_audio_stream(misnamed)
+    assert misnamed in iter_audio_files(tmp_path)
 
 
 def test_export_excel_writes_matlab_style_sheets(tmp_path):

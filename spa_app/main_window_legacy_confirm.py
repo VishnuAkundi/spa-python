@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from spa_core.audio import export_speech_segments, play_audio, read_wav
+from spa_core.audio import MEDIA_FILE_FILTER, export_speech_segments, play_audio, read_wav
 from spa_core.export import export_excel
 from spa_core.models import SpaSettings, SpaSignal
 from spa_core.segmentation import run_spa
@@ -71,7 +71,7 @@ class MainWindow(QMainWindow):
         central = QWidget()
         central.setLayout(layout)
         self.setCentralWidget(central)
-        self._set_status("Load a WAV file to begin.")
+        self._set_status("Load an audio file to begin.")
         self._plot_empty()
 
     def _build_controls(self) -> QWidget:
@@ -123,7 +123,7 @@ class MainWindow(QMainWindow):
         outer.addLayout(form)
 
         buttons = [
-            ("Load WAV", self.load_file),
+            ("Load Audio", self.load_file),
             ("Select Noise Region", self.select_noise_region),
             ("Select Analysis Region", self.select_analysis_region),
             ("Select Manual Threshold", self.select_manual_threshold),
@@ -274,7 +274,7 @@ class MainWindow(QMainWindow):
         self.canvas.draw_idle()
 
     def load_file(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Load WAV file", str(Path.home()), "WAV files (*.wav *.WAV);;All files (*)")
+        path, _ = QFileDialog.getOpenFileName(self, "Load Audio File", str(Path.home()), MEDIA_FILE_FILTER)
         if not path:
             return
         try:
@@ -292,19 +292,19 @@ class MainWindow(QMainWindow):
 
     def select_noise_region(self) -> None:
         if self.signal is None:
-            self._warn("No file", "Load a WAV file first.")
+            self._warn("No file", "Load an audio file first.")
             return
         self._start_region_selection("noise", "Click the beginning and end of a noise/pause-only region.")
 
     def select_analysis_region(self) -> None:
         if self.signal is None:
-            self._warn("No file", "Load a WAV file first.")
+            self._warn("No file", "Load an audio file first.")
             return
         self._start_region_selection("analysis", "Click the beginning and end of the full analysis window.")
 
     def select_manual_threshold(self) -> None:
         if self.signal is None:
-            self._warn("No file", "Load a WAV file first.")
+            self._warn("No file", "Load an audio file first.")
             return
         self._clear_selection_state()
         self._plot_signal()
@@ -441,7 +441,7 @@ class MainWindow(QMainWindow):
 
     def run_analysis(self) -> None:
         if self.signal is None:
-            self._warn("No file", "Load a WAV file first.")
+            self._warn("No file", "Load an audio file first.")
             return
         settings = self._settings()
         if settings.threshold_mode == "automatic" and self.noise_region is None:
@@ -475,7 +475,7 @@ class MainWindow(QMainWindow):
 
     def play_full_file(self) -> None:
         if self.signal is None:
-            self._warn("No file", "Load a WAV file first.")
+            self._warn("No file", "Load an audio file first.")
             return
         try:
             play_audio(self.signal.raw_audio, self.signal.sample_rate)
@@ -484,7 +484,7 @@ class MainWindow(QMainWindow):
 
     def play_analysis_region(self) -> None:
         if self.signal is None:
-            self._warn("No file", "Load a WAV file first.")
+            self._warn("No file", "Load an audio file first.")
             return
         if self.result is not None:
             start, end = self.result.analysis_region

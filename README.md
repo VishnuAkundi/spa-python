@@ -1,12 +1,12 @@
 # SPA Python
 
-SPA Python is a desktop app for Speech Pause Analysis of WAV recordings. It was
+SPA Python is a desktop app for Speech Pause Analysis of audio recordings. It was
 ported from the original MATLAB SPA workflow and redesigned as a guided GUI.
 
 The app lets you:
 
 - choose SPA settings once per session;
-- load one WAV, multiple WAVs, or a folder of WAV files;
+- load one audio file, multiple audio files, or a folder of audio/media files;
 - select a noise-only region and an analysis region;
 - review detected speech and pause segments;
 - QC-audit every detected speech and pause segment;
@@ -21,6 +21,13 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 python run_spa.py
+```
+
+Install FFmpeg to open non-WAV formats and files whose extensions are misleading
+such as WebM recordings named `.wav`:
+
+```bash
+brew install ffmpeg
 ```
 
 For day-to-day lab use, see [docs/USER_GUIDE.md](docs/USER_GUIDE.md).
@@ -40,7 +47,7 @@ spa_python/
 ## Outputs
 
 By default, folder processing writes to a `spa_outputs/` folder inside the
-selected audio folder. Each WAV gets:
+selected audio folder. Each processed source file gets:
 
 - `<file_stem>_segments.csv`
 - `metadata_json/<file_stem>_segments_meta.json`

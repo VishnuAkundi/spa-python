@@ -9,7 +9,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from spa_core.audio import play_audio, read_wav, stop_audio
+from spa_core.audio import MEDIA_FILE_FILTER, iter_audio_files, play_audio, read_wav, stop_audio
 from spa_core.export import export_segment_audit_csv
 from spa_core.models import SpaResult, SpaSettings, SpaSignal
 from spa_core.segmentation import run_spa
@@ -357,8 +357,8 @@ class MainWindow(QMainWindow):
         outer.addWidget(title)
 
         actions = QHBoxLayout()
-        single = QPushButton("Select WAV")
-        multiple = QPushButton("Select Multiple WAVs")
+        single = QPushButton("Select Audio File")
+        multiple = QPushButton("Select Multiple Audio Files")
         folder = QPushButton("Select Folder")
         for button in (single, multiple, folder):
             button.setMinimumHeight(42)
@@ -839,26 +839,22 @@ class MainWindow(QMainWindow):
             self._show_page(PAGE_BOUNDARIES)
 
     def select_single_file(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Select WAV", str(Path.home()), "WAV files (*.wav *.WAV);;All files (*)")
+        path, _ = QFileDialog.getOpenFileName(self, "Select Audio File", str(Path.home()), MEDIA_FILE_FILTER)
         if path:
             self.set_queue([Path(path)])
 
     def select_multiple_files(self) -> None:
-        paths, _ = QFileDialog.getOpenFileNames(self, "Select WAV files", str(Path.home()), "WAV files (*.wav *.WAV);;All files (*)")
+        paths, _ = QFileDialog.getOpenFileNames(self, "Select Audio Files", str(Path.home()), MEDIA_FILE_FILTER)
         if paths:
             self.set_queue([Path(path) for path in paths])
 
     def select_folder(self) -> None:
-        directory = QFileDialog.getExistingDirectory(self, "Select folder of WAV files", str(Path.home()))
+        directory = QFileDialog.getExistingDirectory(self, "Select folder of audio/media files", str(Path.home()))
         if not directory:
             return
-        paths = sorted(
-            path
-            for path in Path(directory).rglob("*")
-            if path.is_file() and path.suffix.lower() in {".wav", ".wave"}
-        )
+        paths = iter_audio_files(Path(directory))
         if not paths:
-            self.warn("No WAV files", "No WAV files were found in that folder.")
+            self.warn("No audio files", "No files with readable audio streams were found in that folder.")
             return
         self.set_queue(paths, default_output_base=Path(directory))
 
@@ -896,11 +892,11 @@ class MainWindow(QMainWindow):
 
     def start_next_queued_file(self) -> None:
         if not self.queue:
-            self.warn("No files", "Select a WAV file or queue first.")
+            self.warn("No files", "Select an audio file or queue first.")
             return
         next_index = self.next_pending_index()
         if next_index is None:
-            self.warn("Queue complete", "Every queued WAV already has a segment CSV in the output folder.")
+            self.warn("Queue complete", "Every queued audio file already has a segment CSV in the output folder.")
             self.refresh_queue_display()
             return
         self.queue_index = next_index
@@ -908,7 +904,7 @@ class MainWindow(QMainWindow):
 
     def open_selected_queue_file(self) -> None:
         if not self.queue:
-            self.warn("No files", "Select a WAV file or queue first.")
+            self.warn("No files", "Select an audio file or queue first.")
             return
         selected_index = self.queue_list.currentRow()
         if selected_index < 0 or selected_index >= len(self.queue):

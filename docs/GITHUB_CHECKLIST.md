@@ -43,7 +43,7 @@ python -m pip check
 - `outputs/`
 - `spa_outputs/`
 - `reports/`
-- participant WAV files
+- participant audio/media files
 - generated CSV/XLSX outputs
 
 ## Suggested First Commit
