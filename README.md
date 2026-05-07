@@ -53,7 +53,7 @@ selected audio folder. Each processed source file gets:
 - `metadata_json/<file_stem>_segments_meta.json`
 
 The CSV includes chronological speech and pause rows, absolute onset/offset
-times, pause-position flags, and QC audit selections. See
+times, pause-position flags, and one QC audit column per GUI group. See
 [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md).
 
 ## Development Checks

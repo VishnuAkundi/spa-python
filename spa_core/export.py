@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from .models import SpaResult
+from .qc_schema import QC_AUDIT_GROUPS, QC_AUDIT_GUI_NAMES
 from .segmentation import EVENT_COLUMNS, TOTAL_COLUMNS
 
 
@@ -14,7 +15,7 @@ SHEET_SPEECH = "Speech Statistics"
 SHEET_PAUSE = "Pause Statistics"
 SHEET_TOTAL = "Total Statistics"
 
-SEGMENT_AUDIT_COLUMNS = [
+BASE_SEGMENT_AUDIT_COLUMNS = [
     "file_name",
     "source_path",
     "segment_number",
@@ -23,8 +24,8 @@ SEGMENT_AUDIT_COLUMNS = [
     "onset_seconds_absolute",
     "offset_seconds_absolute",
     "duration_seconds",
-    "audit_json",
 ]
+SEGMENT_AUDIT_COLUMNS = [*BASE_SEGMENT_AUDIT_COLUMNS, *QC_AUDIT_GUI_NAMES]
 
 
 def _with_filename(frame: pd.DataFrame, filename: str, columns: list[str]) -> pd.DataFrame:
@@ -106,7 +107,6 @@ def segment_audit_frame(result: SpaResult, audit_by_segment_number: dict[int, di
                     "onset_seconds_absolute": absolute_start / sample_rate,
                     "offset_seconds_absolute": absolute_end / sample_rate,
                     "duration_seconds": (absolute_end - absolute_start) / sample_rate,
-                    "audit_json": "",
                 }
             )
 
@@ -115,16 +115,40 @@ def segment_audit_frame(result: SpaResult, audit_by_segment_number: dict[int, di
     rows.sort(key=lambda row: (float(row["_absolute_start_sample"]), 0 if row["segment_type"] == "speech" else 1))
     for segment_number, row in enumerate(rows, start=1):
         row["segment_number"] = segment_number
-        row["audit_json"] = json.dumps(
-            audit_by_segment_number.get(segment_number, {"selected_effects": []}),
-            sort_keys=True,
-        )
+        row.update(audit_group_columns(audit_by_segment_number.get(segment_number, {"selected_effects": []})))
         del row["_absolute_start_sample"]
     if rows and rows[0]["segment_type"] == "pause":
         rows[0]["pause_position"] = "leading"
     if rows and rows[-1]["segment_type"] == "pause":
         rows[-1]["pause_position"] = "leading_trailing" if len(rows) == 1 else "trailing"
     return pd.DataFrame(rows, columns=SEGMENT_AUDIT_COLUMNS)
+
+
+def audit_group_columns(audit_data: dict) -> dict[str, str]:
+    group_values = {gui_name: {effect: [] for effect in effects} for gui_name, effects in QC_AUDIT_GROUPS}
+    for item in audit_data.get("selected_effects", []):
+        if not isinstance(item, dict):
+            continue
+        gui_name = str(item.get("gui_name", ""))
+        effect = str(item.get("effect", ""))
+        if gui_name not in group_values or effect not in group_values[gui_name]:
+            continue
+        group_values[gui_name][effect] = audit_time_span(item)
+    return {gui_name: json.dumps(group_values[gui_name], sort_keys=True) for gui_name in QC_AUDIT_GUI_NAMES}
+
+
+def audit_time_span(item: dict) -> list[float]:
+    region = item.get("issue_region")
+    if not isinstance(region, dict):
+        return []
+    try:
+        start = float(region["onset_seconds_absolute"])
+        end = float(region["offset_seconds_absolute"])
+    except (KeyError, TypeError, ValueError):
+        return []
+    if end <= start:
+        return []
+    return [start, end]
 
 
 def export_segment_audit_csv(

@@ -99,7 +99,7 @@ Use playback buttons to confirm the regions:
 - Play Analysis Region
 
 The playback bar shows current time and can be dragged to move within the
-current playback range.
+current playback range. Press Space to pause or resume playback.
 
 Click Confirm And Run SPA when the selected regions look right.
 
@@ -120,6 +120,7 @@ Color guide:
 - detected pause: blue overlay.
 
 Use Play Full Audio or Play Analysis Region if you need to listen again.
+Press Space to pause or resume playback.
 
 If the segmentation looks wrong, click Back to return to boundary selection and
 adjust the noise or analysis region. If it looks acceptable, click Confirm
@@ -132,24 +133,48 @@ including both speech and pause segments.
 
 For each segment:
 
-1. Review the waveform.
+1. Review the waveform and spectrogram.
 2. Play the segment.
 3. Select any specific QC artifacts that apply.
 4. Click Next Segment.
+
+The top plot shows the original amplitude waveform. The bottom plot is a
+time-aligned spectrogram for checking frequency structure such as formants. The
+red playback cursor moves across both plots.
+
+To inspect a smaller section, click Select Zoom, then click the zoom start and
+end time on either plot. Both plots will zoom to that same time window. Use Play
+Zoom to play only the zoomed section, or Reset Zoom to return to the full
+segment.
+
+Use the Speed control beside Play Segment to slow down or speed up playback for
+the current and later QC segments. Press Space to pause or resume segment
+playback.
+
+When you check a QC artifact, the app asks you to mark where that issue occurs.
+Click the issue start and end time on either QC plot, then click Confirm
+Boundary. Use Play Boundary to listen to the selected issue range before or
+after confirming it. You can still play, zoom, and change speed while setting
+the issue boundary. To undo the artifact, uncheck it. To adjust a saved artifact
+boundary, select it in the Issue Boundary dropdown and click Edit Boundary.
 
 The group names are labels only. Select the specific artifact checkboxes under
 each group.
 
 QC groups:
 
-- Environmental noise: Traffic, HVAC, Pets, TV (non-speech)
+- Environmental noise: Traffic, HVAC, Pets, TV (non-speech), Beep,
+  Microphone rubbing, Non-specific environmental noise
 - Competing speech: TV (speech), Other human speakers
-- Volume unstable: Volume too quiet, Volume too loud
-- Clipping: Clipping/Saturation
+- Volume unstable: Volume too quiet, Volume too loud, Volume changes
+- Clipping: Crackling on loud syllables, Grainy, sandy, buzzing voice texture,
+  Whole voice sounds crushed or overloaded
 - Reverberation/echo: Reverb, Echo
-- Platform effects: Muffled, Compressed/robotic
+- Platform effects: Muffled, filtered, telephone-like; Underwater, robotic,
+  warbly, codec-like
 - Temporal discontinuities: Audio lagging, Audio glitching, Audio skipped/missed
-- Any non-task related content: Extra or filler word, Missed word
+- Any non-task related content: Extra or filler word, Missed word,
+  Lip smacking/mouth sounds, Mouse clicking/keyboard noise, Laughing, Coughing
 
 Use Previous Segment to go back within the current file.
 

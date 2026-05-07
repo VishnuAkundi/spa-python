@@ -43,6 +43,9 @@ Playback uses `sounddevice`. Try:
 3. Restart the app.
 4. Run `python -m pip check` to confirm dependencies are consistent.
 
+Space pauses or resumes the current playback range on pages that have audio
+playback. In the QC page, the Speed control changes how fast segments play.
+
 ## The Segmentation Looks Like Everything Is Speech
 
 Usually this means the selected noise region was not representative or the

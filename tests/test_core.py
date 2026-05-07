@@ -12,6 +12,7 @@ from spa_core.audio import has_audio_stream, iter_audio_files, read_wav
 from spa_core.export import SEGMENT_AUDIT_COLUMNS, export_excel, segment_audit_frame
 from spa_core.models import SpaSettings
 from spa_core.processing import amplitude_envelope
+from spa_core.qc_schema import QC_AUDIT_GUI_NAMES
 from spa_core.segmentation import detect_events, run_spa
 from spa_core.thresholds import adaptive_threshold_curve, automatic_static_threshold
 
@@ -161,7 +162,16 @@ def test_segment_audit_frame_uses_absolute_chronological_rows(tmp_path):
         result,
         {
             1: {
-                "selected_effects": [{"gui_name": "Environmental noise", "effect": "Traffic"}],
+                "selected_effects": [
+                    {
+                        "gui_name": "Environmental noise",
+                        "effect": "Traffic",
+                        "issue_region": {
+                            "onset_seconds_absolute": 0.3,
+                            "offset_seconds_absolute": 0.4,
+                        },
+                    }
+                ],
             },
             2: {"selected_effects": []},
         },
@@ -177,7 +187,14 @@ def test_segment_audit_frame_uses_absolute_chronological_rows(tmp_path):
         assert frame.iloc[-1]["pause_position"] == "trailing"
     assert set(frame.iloc[1:-1]["pause_position"]).issubset({0})
 
-    speech_audit = frame[frame["segment_type"] == "speech"].iloc[0]["audit_json"]
-    assert json.loads(frame.iloc[0]["audit_json"])["selected_effects"] == [{"gui_name": "Environmental noise", "effect": "Traffic"}]
-    assert speech_audit != "NA"
-    assert (frame[frame["segment_type"] == "pause"]["audit_json"] != "NA").all()
+    assert "audit_json" not in frame.columns
+    assert all(column in frame.columns for column in QC_AUDIT_GUI_NAMES)
+    assert frame[QC_AUDIT_GUI_NAMES].notna().all().all()
+
+    environmental = json.loads(frame.iloc[0]["Environmental noise"])
+    assert environmental["Traffic"] == [0.3, 0.4]
+    assert environmental["HVAC"] == []
+    assert set(environmental) >= {"Traffic", "HVAC", "Pets", "TV (non-speech)"}
+
+    competing = json.loads(frame.iloc[0]["Competing speech"])
+    assert competing == {"Other human speakers": [], "TV (speech)": []}

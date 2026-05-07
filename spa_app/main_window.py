@@ -8,25 +8,17 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy import signal as scipy_signal
 
 from spa_core.audio import MEDIA_FILE_FILTER, iter_audio_files, play_audio, read_wav, stop_audio
 from spa_core.export import export_segment_audit_csv
 from spa_core.models import SpaResult, SpaSettings, SpaSignal
+from spa_core.qc_schema import QC_AUDIT_GROUPS, QC_AUDIT_METADATA
 from spa_core.segmentation import run_spa
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_ROOT = PROJECT_ROOT / "outputs"
-QC_AUDIT_GROUPS = [
-    ("Environmental noise", ["Traffic", "HVAC", "Pets", "TV (non-speech)"]),
-    ("Competing speech", ["TV (speech)", "Other human speakers"]),
-    ("Volume unstable", ["Volume too quiet", "Volume too loud"]),
-    ("Clipping", ["Clipping/Saturation"]),
-    ("Reverberation/echo", ["Reverb", "Echo"]),
-    ("Platform effects", ["Muffled", "Compressed/robotic"]),
-    ("Temporal discontinuities", ["Audio lagging", "Audio glitching", "Audio skipped/missed"]),
-    ("Any non-task related content", ["Extra or filler word", "Missed word"]),
-]
 BAMBOO_PASSAGE = (
     "Bamboo walls are getting to be very popular. They are strong, easy to use, and good-looking. "
     "They provide a good background and can create a look of a Japanese garden. Bamboo is a grass, "
@@ -43,7 +35,7 @@ os.environ.setdefault("MPLCONFIGDIR", str(_MPL_CONFIG_DIR))
 
 try:
     from PySide6.QtCore import QPoint, Qt, QTimer
-    from PySide6.QtGui import QColor, QPainter, QPen
+    from PySide6.QtGui import QColor, QKeySequence, QPainter, QPen, QShortcut
     from PySide6.QtWidgets import (
         QApplication,
         QCheckBox,
@@ -233,6 +225,12 @@ class MainWindow(QMainWindow):
         self.audit_by_segment_number: dict[int, dict[str, object]] = {}
         self.audit_checks: list[tuple[str, QCheckBox]] = []
         self.audit_index = 0
+        self.audit_zoom_region: tuple[int, int] | None = None
+        self.audit_zoom_clicks: list[int] = []
+        self.audit_zoom_selecting = False
+        self.audit_issue_key: tuple[str, str] | None = None
+        self.audit_issue_clicks: list[int] = []
+        self._updating_audit_checks = False
         self.loaded_from_saved_output = False
         self.last_saved_path: Path | None = None
         self.output_run_dir = OUTPUT_ROOT
@@ -244,6 +242,7 @@ class MainWindow(QMainWindow):
         self.playback_started_sample = 0
         self.playback_started_at = 0.0
         self.playback_label = "Playback"
+        self.playback_speed = 1.0
         self.playback_button: QPushButton | None = None
         self.playback_button_play_text = ""
         self.playback_button_stop_text = ""
@@ -252,6 +251,7 @@ class MainWindow(QMainWindow):
         self.playback_timer = QTimer(self)
         self.playback_timer.setInterval(50)
         self.playback_timer.timeout.connect(self.update_playback_progress)
+        self.space_shortcut: QShortcut | None = None
 
         self._build_ui()
         self._apply_styles()
@@ -279,6 +279,10 @@ class MainWindow(QMainWindow):
         top_layout.addWidget(self.files_button)
         top_layout.addWidget(self.settings_button)
         layout.addWidget(self.top_bar)
+
+        self.space_shortcut = QShortcut(QKeySequence(Qt.Key_Space), self)
+        self.space_shortcut.setContext(Qt.ApplicationShortcut)
+        self.space_shortcut.activated.connect(self.toggle_current_page_playback)
 
         self.stack = QStackedWidget()
         layout.addWidget(self.stack, stretch=1)
@@ -583,8 +587,11 @@ class MainWindow(QMainWindow):
         self.audit_title.setObjectName("PageTitle")
         self.audit_meta = QLabel("")
         self.audit_meta.setObjectName("MetricText")
+        self.audit_zoom_status = QLabel("")
+        self.audit_zoom_status.setObjectName("SubtleText")
         outer.addWidget(self.audit_title)
         outer.addWidget(self.audit_meta)
+        outer.addWidget(self.audit_zoom_status)
 
         content = QHBoxLayout()
         content.setSpacing(18)
@@ -597,11 +604,14 @@ class MainWindow(QMainWindow):
         passage_box.setMaximumHeight(145)
         left_layout.addWidget(passage_box)
 
-        self.audit_figure = Figure(figsize=(10, 5), tight_layout=True)
+        self.audit_figure = Figure(figsize=(10, 6), tight_layout=True)
         self.audit_canvas = FigureCanvas(self.audit_figure)
-        self.audit_ax = self.audit_figure.add_subplot(111)
+        self.audit_canvas.mpl_connect("button_press_event", self.on_audit_plot_click)
+        audit_grid = self.audit_figure.add_gridspec(2, 1, height_ratios=[1.0, 1.15])
+        self.audit_ax = self.audit_figure.add_subplot(audit_grid[0])
+        self.audit_ax_spec = self.audit_figure.add_subplot(audit_grid[1], sharex=self.audit_ax)
         audit_stack_widget = QWidget()
-        audit_stack_widget.setMinimumHeight(360)
+        audit_stack_widget.setMinimumHeight(430)
         audit_stack = QStackedLayout(audit_stack_widget)
         audit_stack.setContentsMargins(0, 0, 0, 0)
         audit_stack.setStackingMode(QStackedLayout.StackAll)
@@ -622,6 +632,36 @@ class MainWindow(QMainWindow):
         qc_title.setObjectName("MetricText")
         right_layout.addWidget(qc_title)
 
+        issue_box = QGroupBox("Issue Boundary")
+        issue_layout = QVBoxLayout(issue_box)
+        self.audit_issue_status = QLabel("Check a QC artifact to set where it occurs.")
+        self.audit_issue_status.setWordWrap(True)
+        self.audit_issue_status.setObjectName("SubtleText")
+        self.audit_issue_combo = QComboBox()
+        issue_buttons = QHBoxLayout()
+        self.audit_issue_edit_button = QPushButton("Edit")
+        self.audit_issue_play_button = QPushButton("Play")
+        self.audit_issue_confirm_button = QPushButton("Confirm")
+        for button, tooltip in (
+            (self.audit_issue_edit_button, "Edit the selected issue boundary"),
+            (self.audit_issue_play_button, "Play the selected issue boundary"),
+            (self.audit_issue_confirm_button, "Confirm the selected issue boundary"),
+        ):
+            button.setObjectName("CompactButton")
+            button.setToolTip(tooltip)
+            button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.audit_issue_edit_button.clicked.connect(self.edit_selected_issue_boundary)
+        self.audit_issue_play_button.clicked.connect(lambda: self.play_selected_issue_boundary(self.audit_issue_play_button))
+        self.audit_issue_confirm_button.clicked.connect(self.confirm_audit_issue_boundary)
+        self.audit_issue_combo.currentIndexChanged.connect(self.on_audit_issue_combo_changed)
+        issue_buttons.addWidget(self.audit_issue_edit_button)
+        issue_buttons.addWidget(self.audit_issue_play_button)
+        issue_buttons.addWidget(self.audit_issue_confirm_button)
+        issue_layout.addWidget(self.audit_issue_status)
+        issue_layout.addWidget(self.audit_issue_combo)
+        issue_layout.addLayout(issue_buttons)
+        right_layout.addWidget(issue_box)
+
         qc_container = QWidget()
         qc_layout = QVBoxLayout(qc_container)
         qc_layout.setContentsMargins(0, 0, 0, 0)
@@ -633,6 +673,7 @@ class MainWindow(QMainWindow):
             group_layout.setSpacing(4)
             for effect in effects:
                 check = QCheckBox(effect)
+                check.toggled.connect(lambda checked, gui_name=gui_name, check=check: self.on_audit_check_toggled(gui_name, check, checked))
                 self.audit_checks.append((gui_name, check))
                 group_layout.addWidget(check)
             qc_layout.addWidget(group)
@@ -648,15 +689,39 @@ class MainWindow(QMainWindow):
 
         actions = QHBoxLayout()
         self.audit_play_button = QPushButton("Play Segment")
+        self.audit_zoom_select_button = QPushButton("Select Zoom")
+        self.audit_zoom_play_button = QPushButton("Play Zoom")
+        self.audit_zoom_reset_button = QPushButton("Reset Zoom")
+        speed_label = QLabel("Speed")
+        self.audit_speed_combo = QComboBox()
+        for label, value in (
+            ("0.50x", 0.50),
+            ("0.75x", 0.75),
+            ("1.00x", 1.00),
+            ("1.25x", 1.25),
+            ("1.50x", 1.50),
+            ("2.00x", 2.00),
+        ):
+            self.audit_speed_combo.addItem(label, value)
+        self.audit_speed_combo.setCurrentText("1.00x")
         previous = QPushButton("Previous Segment")
         next_button = QPushButton("Next Segment")
         next_button.setObjectName("PrimaryButton")
         self.audit_play_button.clicked.connect(lambda: self.play_current_audit_segment(self.audit_play_button))
+        self.audit_zoom_select_button.clicked.connect(self.start_audit_zoom_selection)
+        self.audit_zoom_play_button.clicked.connect(lambda: self.play_current_audit_zoom(self.audit_zoom_play_button))
+        self.audit_zoom_reset_button.clicked.connect(self.reset_audit_zoom)
+        self.audit_speed_combo.currentIndexChanged.connect(self.on_playback_speed_changed)
         previous.clicked.connect(self.previous_audit_segment)
         next_button.clicked.connect(self.next_audit_segment)
         self.audit_previous_button = previous
         self.audit_next_button = next_button
         actions.addWidget(self.audit_play_button)
+        actions.addWidget(self.audit_zoom_select_button)
+        actions.addWidget(self.audit_zoom_play_button)
+        actions.addWidget(self.audit_zoom_reset_button)
+        actions.addWidget(speed_label)
+        actions.addWidget(self.audit_speed_combo)
         actions.addStretch(1)
         actions.addWidget(previous)
         actions.addWidget(next_button)
@@ -745,6 +810,11 @@ class MainWindow(QMainWindow):
             QPushButton#PrimaryButton:hover {
                 background: #0f5961;
             }
+            QPushButton#CompactButton {
+                font-size: 12px;
+                padding: 6px 8px;
+                min-width: 0;
+            }
             QFrame#PlaybackBar {
                 background: #ffffff;
                 border: 1px solid #d7dcdf;
@@ -808,10 +878,16 @@ class MainWindow(QMainWindow):
             self._show_page(PAGE_BOUNDARIES)
         elif page == PAGE_AUDIT:
             if self.audit_index > 0:
+                if not self.ensure_current_audit_resolved():
+                    return
                 self.store_current_audit()
                 self.audit_index -= 1
+                self.clear_audit_zoom()
+                self.clear_audit_issue_selection()
                 self.load_audit_segment()
             else:
+                if not self.ensure_current_audit_resolved():
+                    return
                 self._show_page(PAGE_REVIEW)
         elif page == PAGE_SAVE:
             if self.result is not None and len(self.audit_segments()) > 0:
@@ -960,6 +1036,8 @@ class MainWindow(QMainWindow):
         self.boundary_clicks = []
         self.audit_by_segment_number = {}
         self.audit_index = 0
+        self.clear_audit_zoom()
+        self.clear_audit_issue_selection()
         self.loaded_from_saved_output = False
         self.last_saved_path = None
         self._show_page(PAGE_BOUNDARIES)
@@ -985,6 +1063,8 @@ class MainWindow(QMainWindow):
         self.boundary_clicks = []
         self.audit_by_segment_number = audit_by_segment_number
         self.audit_index = 0
+        self.clear_audit_zoom()
+        self.clear_audit_issue_selection()
         self.loaded_from_saved_output = True
         self.last_saved_path = output_path
         self._show_page(PAGE_REVIEW)
@@ -1033,7 +1113,7 @@ class MainWindow(QMainWindow):
             return None
 
     def result_from_saved_segments(self, signal: SpaSignal, saved: pd.DataFrame) -> tuple[SpaResult, dict[int, dict[str, object]]]:
-        required = {"segment_type", "onset_seconds_absolute", "offset_seconds_absolute", "audit_json"}
+        required = {"segment_type", "onset_seconds_absolute", "offset_seconds_absolute"}
         missing = required - set(saved.columns)
         if missing:
             raise ValueError(f"Missing saved segment columns: {', '.join(sorted(missing))}")
@@ -1042,7 +1122,7 @@ class MainWindow(QMainWindow):
         speech_events: list[list[int]] = []
         pause_events: list[list[int]] = []
         segment_audits: dict[int, dict[str, object]] = {}
-        absolute_events: list[tuple[str, int, int, object]] = []
+        absolute_events: list[tuple[str, int, int, pd.Series]] = []
         for _, row in saved.iterrows():
             segment_type = str(row["segment_type"]).strip().lower()
             if segment_type not in {"speech", "pause"}:
@@ -1051,20 +1131,20 @@ class MainWindow(QMainWindow):
             end = int(round(float(row["offset_seconds_absolute"]) * fs))
             start = max(0, min(len(signal.raw_audio), start))
             end = max(start + 1, min(len(signal.raw_audio), end))
-            absolute_events.append((segment_type, start, end, row.get("audit_json", "NA")))
+            absolute_events.append((segment_type, start, end, row))
         if not absolute_events:
             raise ValueError("No speech or pause rows were found in the saved CSV.")
-        analysis_start = min(start for _, start, _, _ in absolute_events)
-        analysis_end = max(end for _, _, end, _ in absolute_events)
+        analysis_start = min(start for _, start, _, _row in absolute_events)
+        analysis_end = max(end for _, _, end, _row in absolute_events)
         segment_number = 0
-        for segment_type, start, end, audit_json in absolute_events:
+        for segment_type, start, end, row in absolute_events:
             segment_number += 1
             relative = [start - analysis_start, end - analysis_start]
             if segment_type == "speech":
                 speech_events.append(relative)
             else:
                 pause_events.append(relative)
-            segment_audits[segment_number] = self.parse_saved_audit_json(audit_json)
+            segment_audits[segment_number] = self.parse_saved_row_audit(row, fs)
         signal.analysis_region = (analysis_start, analysis_end)
         threshold_curve = np.full(max(1, analysis_end - analysis_start), np.nan)
         result = SpaResult(
@@ -1083,6 +1163,59 @@ class MainWindow(QMainWindow):
             pause_events_samples=np.asarray(pause_events, dtype=int).reshape(-1, 2),
         )
         return result, segment_audits
+
+    def parse_saved_row_audit(self, row: pd.Series, sample_rate: int) -> dict[str, object]:
+        if "audit_json" in row.index:
+            audit = self.parse_saved_audit_json(row.get("audit_json", ""))
+            if audit.get("selected_effects"):
+                return audit
+
+        selected_effects = []
+        for gui_name, effects in QC_AUDIT_GROUPS:
+            if gui_name not in row.index:
+                continue
+            data = self.parse_saved_audit_group(row.get(gui_name))
+            for effect in effects:
+                time_span = data.get(effect, [])
+                if not isinstance(time_span, list) or len(time_span) < 2:
+                    continue
+                region = self.issue_region_json_from_seconds(time_span[0], time_span[1], sample_rate)
+                if not region:
+                    continue
+                item = {"gui_name": gui_name, "effect": effect}
+                item.update(self.qc_metadata_for_effect(gui_name, effect))
+                item["issue_region"] = region
+                selected_effects.append(item)
+        return {"selected_effects": selected_effects}
+
+    def parse_saved_audit_group(self, value: object) -> dict[str, object]:
+        if not isinstance(value, str) or not value.strip():
+            return {}
+        try:
+            data = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def issue_region_json_from_seconds(self, start_seconds: object, end_seconds: object, sample_rate: int) -> dict[str, float | int]:
+        try:
+            start_seconds_float = float(start_seconds)
+            end_seconds_float = float(end_seconds)
+        except (TypeError, ValueError):
+            return {}
+        if end_seconds_float <= start_seconds_float:
+            return {}
+        start = int(round(start_seconds_float * sample_rate))
+        end = int(round(end_seconds_float * sample_rate))
+        if end <= start:
+            return {}
+        return {
+            "onset_sample_absolute": int(start),
+            "offset_sample_absolute": int(end),
+            "onset_seconds_absolute": float(start / sample_rate),
+            "offset_seconds_absolute": float(end / sample_rate),
+            "duration_seconds": float((end - start) / sample_rate),
+        }
 
     def parse_saved_audit_json(self, audit_json: object) -> dict[str, object]:
         if not isinstance(audit_json, str) or audit_json.strip().upper() == "NA" or not audit_json.strip():
@@ -1297,6 +1430,8 @@ class MainWindow(QMainWindow):
             return
         self.audit_by_segment_number = {}
         self.audit_index = 0
+        self.clear_audit_zoom()
+        self.clear_audit_issue_selection()
         self.loaded_from_saved_output = False
         self._show_page(PAGE_REVIEW)
 
@@ -1345,6 +1480,8 @@ class MainWindow(QMainWindow):
             self._show_page(PAGE_SAVE)
             return
         self.audit_index = 0
+        self.clear_audit_zoom()
+        self.clear_audit_issue_selection()
         self._show_page(PAGE_AUDIT)
 
     def load_audit_segment(self) -> None:
@@ -1363,10 +1500,15 @@ class MainWindow(QMainWindow):
             if isinstance(item, dict)
         }
         legacy_issues = set(data.get("issues", []))
+        self._updating_audit_checks = True
         for gui_name, check in self.audit_checks:
             check.setChecked((gui_name, check.text()) in selected_effects or check.text() in legacy_issues)
+        self._updating_audit_checks = False
+        self.clear_audit_issue_selection()
         self.audit_previous_button.setEnabled(self.audit_index > 0)
         self.audit_next_button.setText("Continue To Save" if self.audit_index == len(segments) - 1 else "Next Segment")
+        self.update_audit_zoom_controls()
+        self.update_audit_issue_controls()
         self.plot_audit_segment()
 
     def plot_audit_segment(self) -> None:
@@ -1384,23 +1526,435 @@ class MainWindow(QMainWindow):
         x = np.arange(start, end) / fs
         display = self.display_indices(len(x))
         self.audit_ax.clear()
+        self.audit_ax_spec.clear()
         self.audit_ax.plot(x[display], audio[display], color="#4a4f53", linewidth=0.65)
-        self.audit_ax.set_xlabel("Time (seconds)")
+        self.audit_ax.set_title("Original waveform")
         self.audit_ax.set_ylabel("Original amplitude")
         self.audit_ax.grid(True, alpha=0.25)
+        self.plot_audit_spectrogram(audio, start, fs)
+        self.draw_audit_issue_regions()
+        for click in self.audit_zoom_clicks:
+            for ax in (self.audit_ax, self.audit_ax_spec):
+                ax.axvline(click / fs, color="#f28e2b", linewidth=1.2)
+        if self.audit_zoom_region is not None:
+            zoom_start, zoom_end = self.audit_zoom_region
+            for ax in (self.audit_ax, self.audit_ax_spec):
+                ax.axvspan(zoom_start / fs, zoom_end / fs, color="#2f80ed", alpha=0.14)
+            self.audit_ax.set_xlim(zoom_start / fs, zoom_end / fs)
+        else:
+            self.audit_ax.set_xlim(start / fs, end / fs)
         duration = (end - start) / fs
         self.audit_title.setText(f"Audit {segment_type.title()} Segment {self.audit_index + 1} of {len(segments)}")
         self.audit_meta.setText(f"Type {segment_type}  |  Onset {start / fs:.3f}s  |  Offset {end / fs:.3f}s  |  Duration {duration:.3f}s")
-        self.set_playback_range(start, end, f"{segment_type.title()} Segment {self.audit_index + 1}", reset_position=True)
+        if self.audit_zoom_region is not None:
+            zoom_start, zoom_end = self.audit_zoom_region
+            self.set_playback_range(zoom_start, zoom_end, f"Zoomed {segment_type.title()} Segment {self.audit_index + 1}", reset_position=True)
+        else:
+            self.set_playback_range(start, end, f"{segment_type.title()} Segment {self.audit_index + 1}", reset_position=True)
+        self.update_audit_zoom_controls()
+        self.update_audit_issue_controls()
         self.audit_canvas.draw_idle()
         self.update_playback_markers()
+
+    def current_audit_segment_bounds(self) -> tuple[int, int, str] | None:
+        if self.signal is None or self.result is None:
+            return None
+        segments = self.audit_segments()
+        if not segments:
+            return None
+        segment = segments[self.audit_index]
+        return int(segment["start"]), int(segment["end"]), str(segment["segment_type"])
+
+    def clear_audit_zoom(self) -> None:
+        self.audit_zoom_region = None
+        self.audit_zoom_clicks = []
+        self.audit_zoom_selecting = False
+
+    def clear_audit_issue_selection(self) -> None:
+        self.audit_issue_key = None
+        self.audit_issue_clicks = []
+
+    def selected_audit_keys(self) -> list[tuple[str, str]]:
+        return [(gui_name, check.text()) for gui_name, check in self.audit_checks if check.isChecked()]
+
+    def current_audit_effect_map(self) -> dict[tuple[str, str], dict[str, object]]:
+        segment_number = self.audit_index + 1
+        data = self.audit_by_segment_number.get(segment_number, {"selected_effects": []})
+        effects: dict[tuple[str, str], dict[str, object]] = {}
+        for item in data.get("selected_effects", []):
+            if not isinstance(item, dict):
+                continue
+            gui_name = str(item.get("gui_name", ""))
+            effect = str(item.get("effect", ""))
+            if gui_name and effect:
+                effects[(gui_name, effect)] = dict(item)
+        return effects
+
+    def issue_region_from_entry(self, entry: dict[str, object] | None) -> tuple[int, int] | None:
+        if self.signal is None or not isinstance(entry, dict):
+            return None
+        region = entry.get("issue_region")
+        if not isinstance(region, dict):
+            return None
+        try:
+            if "onset_sample_absolute" in region and "offset_sample_absolute" in region:
+                start = int(region["onset_sample_absolute"])
+                end = int(region["offset_sample_absolute"])
+            else:
+                start = self.seconds_to_sample(float(region["onset_seconds_absolute"]))
+                end = self.seconds_to_sample(float(region["offset_seconds_absolute"]))
+        except (KeyError, TypeError, ValueError):
+            return None
+        bounds = self.current_audit_segment_bounds()
+        if bounds is None:
+            return None
+        segment_start, segment_end, _ = bounds
+        start = max(segment_start, min(segment_end, start))
+        end = max(segment_start, min(segment_end, end))
+        if end <= start:
+            return None
+        return start, end
+
+    def issue_region_json(self, start: int, end: int) -> dict[str, float | int]:
+        if self.signal is None:
+            return {}
+        return {
+            "onset_sample_absolute": int(start),
+            "offset_sample_absolute": int(end),
+            "onset_seconds_absolute": float(start / self.signal.sample_rate),
+            "offset_seconds_absolute": float(end / self.signal.sample_rate),
+            "duration_seconds": float((end - start) / self.signal.sample_rate),
+        }
+
+    def update_audit_issue_combo(self, preferred_key: tuple[str, str] | None = None) -> None:
+        if not hasattr(self, "audit_issue_combo"):
+            return
+        current = preferred_key or self.audit_issue_combo.currentData()
+        selected_keys = self.selected_audit_keys()
+        self.audit_issue_combo.blockSignals(True)
+        self.audit_issue_combo.clear()
+        for gui_name, effect in selected_keys:
+            self.audit_issue_combo.addItem(f"{gui_name}: {effect}", (gui_name, effect))
+        if current in selected_keys:
+            self.audit_issue_combo.setCurrentIndex(selected_keys.index(current))
+        self.audit_issue_combo.blockSignals(False)
+
+    def update_audit_issue_controls(self, preferred_key: tuple[str, str] | None = None) -> None:
+        if not hasattr(self, "audit_issue_status"):
+            return
+        self.update_audit_check_enabled_states()
+        self.update_audit_issue_combo(preferred_key or self.audit_issue_key)
+        selected_key = self.audit_issue_combo.currentData()
+        selected_keys = self.selected_audit_keys()
+        effect_map = self.current_audit_effect_map()
+        self.audit_issue_edit_button.setEnabled(selected_key in selected_keys)
+        self.audit_issue_play_button.setEnabled(self.current_issue_boundary_play_range() is not None)
+        self.audit_issue_confirm_button.setEnabled(self.audit_issue_key is not None and len(self.audit_issue_clicks) >= 2)
+        if self.audit_issue_key is not None:
+            gui_name, effect = self.audit_issue_key
+            if len(self.audit_issue_clicks) == 0:
+                self.audit_issue_status.setText(f"{gui_name}: {effect} needs a boundary. Click the issue start time on either plot, or uncheck it.")
+            elif len(self.audit_issue_clicks) == 1 and self.signal is not None:
+                seconds = self.audit_issue_clicks[0] / self.signal.sample_rate
+                self.audit_issue_status.setText(f"{gui_name}: {effect} start set at {seconds:.3f}s. Click the issue end time.")
+            else:
+                self.audit_issue_status.setText(f"{gui_name}: {effect} boundary selected. Click Confirm Boundary, or uncheck it to undo.")
+            return
+        if selected_key in selected_keys:
+            entry = effect_map.get(selected_key)
+            region = self.issue_region_from_entry(entry)
+            gui_name, effect = selected_key
+            if region is not None and self.signal is not None:
+                start, end = region
+                self.audit_issue_status.setText(f"{gui_name}: {effect} boundary {start / self.signal.sample_rate:.3f}s to {end / self.signal.sample_rate:.3f}s. Use Edit Boundary to adjust.")
+            else:
+                self.audit_issue_status.setText(f"{gui_name}: {effect} needs a boundary. Use Edit Boundary or uncheck it.")
+        else:
+            self.audit_issue_status.setText("Check a QC artifact to set where it occurs.")
+
+    def update_audit_check_enabled_states(self) -> None:
+        pending_key = self.audit_issue_key
+        for gui_name, check in self.audit_checks:
+            key = (gui_name, check.text())
+            check.setEnabled(pending_key is None or key == pending_key)
+
+    def current_issue_boundary_play_range(self) -> tuple[int, int, str] | None:
+        if self.signal is None:
+            return None
+        if self.audit_issue_key is not None and len(self.audit_issue_clicks) >= 2:
+            start, end = sorted(self.audit_issue_clicks[:2])
+            if end > start:
+                gui_name, effect = self.audit_issue_key
+                return start, end, f"Issue Boundary: {effect}"
+        selected_key = self.audit_issue_combo.currentData() if hasattr(self, "audit_issue_combo") else None
+        if selected_key in self.selected_audit_keys():
+            region = self.issue_region_from_entry(self.current_audit_effect_map().get(selected_key))
+            if region is not None:
+                _, effect = selected_key
+                start, end = region
+                return start, end, f"Issue Boundary: {effect}"
+        return None
+
+    def play_selected_issue_boundary(self, button: QPushButton | None = None) -> None:
+        play_range = self.current_issue_boundary_play_range()
+        if play_range is None:
+            self.warn("No boundary selected", "Select and confirm an issue boundary, or click both boundary points before playing it.")
+            return
+        start, end, label = play_range
+        self.toggle_playback(start, end, label, button)
+
+    def draw_audit_issue_regions(self) -> None:
+        if self.signal is None:
+            return
+        fs = self.signal.sample_rate
+        effect_map = self.current_audit_effect_map()
+        selected_keys = set(self.selected_audit_keys())
+        for key in selected_keys:
+            region = self.issue_region_from_entry(effect_map.get(key))
+            if region is None:
+                continue
+            color = "#c43c39" if key != self.audit_issue_key else "#f28e2b"
+            start, end = region
+            for ax in (self.audit_ax, self.audit_ax_spec):
+                ax.axvspan(start / fs, end / fs, color=color, alpha=0.18)
+        for click in self.audit_issue_clicks:
+            for ax in (self.audit_ax, self.audit_ax_spec):
+                ax.axvline(click / fs, color="#c43c39", linewidth=1.3, linestyle="--")
+
+    def update_audit_zoom_controls(self) -> None:
+        if not hasattr(self, "audit_zoom_select_button"):
+            return
+        has_zoom = self.audit_zoom_region is not None
+        self.audit_zoom_play_button.setEnabled(has_zoom)
+        self.audit_zoom_reset_button.setEnabled(has_zoom or bool(self.audit_zoom_clicks) or self.audit_zoom_selecting)
+        if self.audit_zoom_selecting:
+            self.audit_zoom_select_button.setText("Selecting Zoom")
+            if len(self.audit_zoom_clicks) == 0:
+                self.audit_zoom_status.setText("Click the zoom start time on either QC plot.")
+            else:
+                seconds = self.audit_zoom_clicks[0] / self.signal.sample_rate if self.signal is not None else 0.0
+                self.audit_zoom_status.setText(f"Zoom start set at {seconds:.3f}s. Click the zoom end time.")
+        elif has_zoom and self.signal is not None:
+            start, end = self.audit_zoom_region
+            self.audit_zoom_select_button.setText("Select Zoom")
+            self.audit_zoom_status.setText(f"Zoom {start / self.signal.sample_rate:.3f}s to {end / self.signal.sample_rate:.3f}s. Play Zoom or Reset Zoom.")
+        else:
+            self.audit_zoom_select_button.setText("Select Zoom")
+            self.audit_zoom_status.setText("Optional: select a zoom window to inspect and play a smaller part of this segment.")
+
+    def start_audit_zoom_selection(self) -> None:
+        if self.current_audit_segment_bounds() is None:
+            return
+        self.stop_playback()
+        self.audit_zoom_region = None
+        self.audit_zoom_clicks = []
+        self.audit_zoom_selecting = True
+        self.update_audit_zoom_controls()
+        self.plot_audit_segment()
+
+    def reset_audit_zoom(self) -> None:
+        bounds = self.current_audit_segment_bounds()
+        self.stop_playback()
+        self.clear_audit_zoom()
+        self.plot_audit_segment()
+        if bounds is not None:
+            start, end, segment_type = bounds
+            self.set_playback_range(start, end, f"{segment_type.title()} Segment {self.audit_index + 1}", reset_position=True)
+
+    def on_audit_plot_click(self, event) -> None:
+        if self.signal is None:
+            return
+        if event.inaxes not in (self.audit_ax, self.audit_ax_spec) or event.xdata is None:
+            return
+        if self.audit_zoom_selecting:
+            self.handle_audit_zoom_click(float(event.xdata))
+        elif self.audit_issue_key is not None:
+            self.handle_audit_issue_click(float(event.xdata))
+
+    def handle_audit_zoom_click(self, seconds: float) -> None:
+        bounds = self.current_audit_segment_bounds()
+        if bounds is None:
+            return
+        segment_start, segment_end, _ = bounds
+        sample = self.seconds_to_sample(seconds)
+        sample = max(segment_start, min(segment_end, sample))
+        self.audit_zoom_clicks.append(sample)
+        if len(self.audit_zoom_clicks) < 2:
+            self.update_audit_zoom_controls()
+            self.plot_audit_segment()
+            return
+        zoom_start, zoom_end = sorted(self.audit_zoom_clicks[:2])
+        if zoom_end <= zoom_start:
+            self.audit_zoom_clicks = []
+            self.warn("Invalid zoom", "The selected zoom window has no duration.")
+            self.update_audit_zoom_controls()
+            return
+        self.audit_zoom_region = (zoom_start, zoom_end)
+        self.audit_zoom_clicks = []
+        self.audit_zoom_selecting = False
+        self.plot_audit_segment()
+
+    def handle_audit_issue_click(self, seconds: float) -> None:
+        bounds = self.current_audit_segment_bounds()
+        if bounds is None:
+            return
+        segment_start, segment_end, _ = bounds
+        sample = self.seconds_to_sample(seconds)
+        sample = max(segment_start, min(segment_end, sample))
+        if len(self.audit_issue_clicks) >= 2:
+            self.audit_issue_clicks = []
+        self.audit_issue_clicks.append(sample)
+        self.update_audit_issue_controls(self.audit_issue_key)
+        self.plot_audit_segment()
+
+    def on_audit_check_toggled(self, gui_name: str, check: QCheckBox, checked: bool) -> None:
+        if self._updating_audit_checks:
+            return
+        key = (gui_name, check.text())
+        if checked:
+            self.store_current_audit()
+            if self.issue_region_from_entry(self.current_audit_effect_map().get(key)) is None:
+                self.start_issue_boundary_selection(key)
+            else:
+                self.update_audit_issue_controls(key)
+                self.plot_audit_segment()
+            return
+        if self.audit_issue_key == key:
+            self.clear_audit_issue_selection()
+        self.store_current_audit()
+        self.update_audit_issue_controls()
+        self.plot_audit_segment()
+
+    def on_audit_issue_combo_changed(self) -> None:
+        if self.audit_issue_key is None:
+            self.update_audit_issue_controls()
+
+    def start_issue_boundary_selection(self, key: tuple[str, str]) -> None:
+        self.stop_playback()
+        self.audit_issue_key = key
+        self.audit_issue_clicks = []
+        self.update_audit_issue_controls(key)
+        self.plot_audit_segment()
+
+    def edit_selected_issue_boundary(self) -> None:
+        key = self.audit_issue_combo.currentData()
+        if key not in self.selected_audit_keys():
+            return
+        self.start_issue_boundary_selection(key)
+
+    def confirm_audit_issue_boundary(self) -> None:
+        if self.signal is None or self.audit_issue_key is None or len(self.audit_issue_clicks) < 2:
+            return
+        start, end = sorted(self.audit_issue_clicks[:2])
+        if end <= start:
+            self.audit_issue_clicks = []
+            self.warn("Invalid boundary", "The selected issue boundary has no duration.")
+            self.update_audit_issue_controls()
+            self.plot_audit_segment()
+            return
+        self.set_issue_region_for_key(self.audit_issue_key, (start, end))
+        confirmed_key = self.audit_issue_key
+        self.clear_audit_issue_selection()
+        self.update_audit_issue_controls(confirmed_key)
+        self.plot_audit_segment()
+
+    def set_issue_region_for_key(self, key: tuple[str, str], region: tuple[int, int]) -> None:
+        self.store_current_audit()
+        segment_number = self.audit_index + 1
+        data = self.audit_by_segment_number.setdefault(segment_number, {"selected_effects": []})
+        effects = [item for item in data.get("selected_effects", []) if isinstance(item, dict)]
+        for item in effects:
+            if (str(item.get("gui_name", "")), str(item.get("effect", ""))) == key:
+                item.update(self.qc_metadata_for_effect(*key))
+                item["issue_region"] = self.issue_region_json(*region)
+                data["selected_effects"] = effects
+                return
+        gui_name, effect = key
+        item = {"gui_name": gui_name, "effect": effect}
+        item.update(self.qc_metadata_for_effect(gui_name, effect))
+        item["issue_region"] = self.issue_region_json(*region)
+        effects.append(item)
+        data["selected_effects"] = effects
+
+    def unresolved_audit_issue_keys(self) -> list[tuple[str, str]]:
+        effect_map = self.current_audit_effect_map()
+        unresolved = []
+        for key in self.selected_audit_keys():
+            if self.issue_region_from_entry(effect_map.get(key)) is None:
+                unresolved.append(key)
+        if self.audit_issue_key is not None and self.audit_issue_key not in unresolved:
+            unresolved.append(self.audit_issue_key)
+        return unresolved
+
+    def ensure_current_audit_resolved(self) -> bool:
+        self.store_current_audit()
+        unresolved = self.unresolved_audit_issue_keys()
+        if not unresolved:
+            return True
+        key = unresolved[0]
+        if self.audit_issue_key == key:
+            self.update_audit_issue_controls(key)
+            self.plot_audit_segment()
+        else:
+            self.start_issue_boundary_selection(key)
+        gui_name, effect = key
+        self.warn("Issue boundary required", f"Set a boundary for {gui_name}: {effect}, or uncheck that QC option before moving on.")
+        return False
+
+    def plot_audit_spectrogram(self, audio: np.ndarray, absolute_start_sample: int, sample_rate: int) -> None:
+        audio = np.asarray(audio, dtype=float).reshape(-1)
+        if audio.size < 16:
+            self.audit_ax_spec.text(0.5, 0.5, "Segment too short for spectrogram", ha="center", va="center", transform=self.audit_ax_spec.transAxes)
+            self.audit_ax_spec.set_xlabel("Time (seconds)")
+            self.audit_ax_spec.set_ylabel("Frequency (Hz)")
+            return
+
+        window_seconds = 0.025
+        target_nperseg = max(64, int(round(window_seconds * sample_rate)))
+        nperseg = min(audio.size, target_nperseg)
+        if nperseg < 16:
+            nperseg = min(audio.size, 16)
+        noverlap = min(nperseg - 1, int(round(nperseg * 0.75)))
+        nfft = 1 << int(np.ceil(np.log2(max(256, nperseg))))
+        frequencies, times, magnitude = scipy_signal.spectrogram(
+            audio,
+            fs=sample_rate,
+            window="hann",
+            nperseg=nperseg,
+            noverlap=noverlap,
+            nfft=nfft,
+            detrend=False,
+            scaling="spectrum",
+            mode="magnitude",
+        )
+        if magnitude.size == 0:
+            return
+        db_values = 20.0 * np.log10(np.maximum(magnitude, np.finfo(float).eps))
+        top = float(np.nanmax(db_values))
+        db_values = np.maximum(db_values, top - 80.0)
+        max_frequency = min(5500.0, sample_rate / 2.0)
+        keep = frequencies <= max_frequency
+        absolute_times = absolute_start_sample / sample_rate + times
+        self.audit_ax_spec.pcolormesh(
+            absolute_times,
+            frequencies[keep],
+            db_values[keep],
+            shading="auto",
+            cmap="magma",
+        )
+        self.audit_ax_spec.set_title("Spectrogram")
+        self.audit_ax_spec.set_ylabel("Frequency (Hz)")
+        self.audit_ax_spec.set_xlabel("Time (seconds)")
+        self.audit_ax_spec.set_ylim(0, max_frequency)
+        self.audit_ax_spec.grid(False)
 
     def store_current_audit(self) -> None:
         if self.result is None or len(self.audit_segments()) == 0:
             return
         segment_number = self.audit_index + 1
+        existing = self.current_audit_effect_map()
         selected_effects = [
-            {"gui_name": gui_name, "effect": check.text()}
+            self.stored_audit_effect(gui_name, check.text(), existing.get((gui_name, check.text())))
             for gui_name, check in self.audit_checks
             if check.isChecked()
         ]
@@ -1408,21 +1962,39 @@ class MainWindow(QMainWindow):
             "selected_effects": selected_effects,
         }
 
+    def stored_audit_effect(self, gui_name: str, effect: str, existing: dict[str, object] | None) -> dict[str, object]:
+        item: dict[str, object] = {"gui_name": gui_name, "effect": effect}
+        item.update(self.qc_metadata_for_effect(gui_name, effect))
+        if isinstance(existing, dict) and self.issue_region_from_entry(existing) is not None:
+            item["issue_region"] = existing["issue_region"]
+        return item
+
+    def qc_metadata_for_effect(self, gui_name: str, effect: str) -> dict[str, str]:
+        return dict(QC_AUDIT_METADATA.get((gui_name, effect), {}))
+
     def previous_audit_segment(self) -> None:
         if self.audit_index <= 0:
             return
+        if not self.ensure_current_audit_resolved():
+            return
         self.store_current_audit()
         self.audit_index -= 1
+        self.clear_audit_zoom()
+        self.clear_audit_issue_selection()
         self.load_audit_segment()
 
     def next_audit_segment(self) -> None:
         if self.result is None:
+            return
+        if not self.ensure_current_audit_resolved():
             return
         self.store_current_audit()
         if self.audit_index >= len(self.audit_segments()) - 1:
             self._show_page(PAGE_SAVE)
             return
         self.audit_index += 1
+        self.clear_audit_zoom()
+        self.clear_audit_issue_selection()
         self.load_audit_segment()
 
     def audit_segments(self) -> list[dict[str, object]]:
@@ -1522,6 +2094,92 @@ class MainWindow(QMainWindow):
         if by_label:
             ax.legend(by_label.values(), by_label.keys(), loc="upper right")
 
+    def playback_sample_rate(self) -> int:
+        if self.signal is None:
+            return 1
+        return max(1, int(round(self.signal.sample_rate * self.playback_speed)))
+
+    def on_playback_speed_changed(self) -> None:
+        if not hasattr(self, "audit_speed_combo"):
+            return
+        value = self.audit_speed_combo.currentData()
+        try:
+            next_speed = float(value)
+        except (TypeError, ValueError):
+            next_speed = 1.0
+        next_speed = max(0.25, min(4.0, next_speed))
+        if np.isclose(next_speed, self.playback_speed):
+            return
+        if self.playback_active:
+            self.update_playback_progress()
+        self.playback_speed = next_speed
+        if self.playback_active and self.playback_range is not None and self.signal is not None:
+            start, end = self.playback_range
+            if self.playback_current_sample >= end:
+                self.stop_playback(finished=True)
+            else:
+                try:
+                    stop_audio()
+                    play_audio(self.signal.raw_audio[self.playback_current_sample:end], self.playback_sample_rate())
+                except Exception as exc:
+                    self.stop_playback()
+                    self.warn("Playback failed", str(exc))
+                    return
+                self.playback_started_sample = self.playback_current_sample
+                self.playback_started_at = time.monotonic()
+        self.update_playback_widgets()
+
+    def toggle_current_page_playback(self) -> None:
+        if self.playback_active:
+            self.stop_playback()
+            return
+        if self.signal is None:
+            return
+        page = self.stack.currentIndex()
+        if page == PAGE_BOUNDARIES:
+            self.start_current_range_or_default(self.boundary_play_full_button)
+        elif page == PAGE_REVIEW:
+            self.start_current_range_or_default(self.review_play_analysis_button)
+        elif page == PAGE_AUDIT:
+            self.start_current_range_or_default(self.audit_play_button)
+
+    def start_current_range_or_default(self, default_button: QPushButton | None) -> None:
+        if self.signal is None:
+            return
+        if self.playback_range is None:
+            if default_button is self.boundary_play_full_button:
+                self.play_full_audio(default_button)
+            elif default_button is self.review_play_analysis_button:
+                self.play_analysis_region(default_button)
+            return
+        start, end = self.playback_range
+        button = self.button_for_playback_label(self.playback_label) or default_button
+        play_text = button.text() if button is not None else ""
+        stop_text = self.stop_text_for_button(play_text)
+        self.start_playback(start, end, self.playback_label, button, play_text, stop_text)
+
+    def button_for_playback_label(self, label: str) -> QPushButton | None:
+        page = self.stack.currentIndex()
+        if page == PAGE_BOUNDARIES:
+            if label == "Full Audio":
+                return self.boundary_play_full_button
+            if label == "Noise Selection":
+                return self.boundary_play_noise_button
+            if label == "Analysis Region":
+                return self.boundary_play_analysis_button
+        elif page == PAGE_REVIEW:
+            if label == "Full Audio":
+                return self.review_play_full_button
+            if label == "Analysis Region":
+                return self.review_play_analysis_button
+        elif page == PAGE_AUDIT:
+            if label.startswith("Issue Boundary:"):
+                return self.audit_issue_play_button
+            if label.startswith("Zoomed "):
+                return self.audit_zoom_play_button
+            return self.audit_play_button
+        return None
+
     def play_full_audio(self, button: QPushButton | None = None) -> None:
         if self.signal is None:
             return
@@ -1561,6 +2219,21 @@ class MainWindow(QMainWindow):
             button,
         )
 
+    def play_current_audit_zoom(self, button: QPushButton | None = None) -> None:
+        if self.signal is None or self.result is None or self.audit_zoom_region is None:
+            return
+        bounds = self.current_audit_segment_bounds()
+        if bounds is None:
+            return
+        _, _, segment_type = bounds
+        start, end = self.audit_zoom_region
+        self.toggle_playback(
+            start,
+            end,
+            f"Zoomed {segment_type.title()} Segment {self.audit_index + 1}",
+            button,
+        )
+
     def play_samples(self, start: int, end: int) -> None:
         self.start_playback(start, end, "Playback", None, "", "")
 
@@ -1593,7 +2266,7 @@ class MainWindow(QMainWindow):
             self.playback_current_sample = start
         play_start = self.playback_current_sample
         try:
-            play_audio(self.signal.raw_audio[play_start:end], self.signal.sample_rate)
+            play_audio(self.signal.raw_audio[play_start:end], self.playback_sample_rate())
         except Exception as exc:
             self.warn("Playback failed", str(exc))
             self.update_playback_widgets()
@@ -1633,7 +2306,7 @@ class MainWindow(QMainWindow):
             return
         _, end = self.playback_range
         elapsed = time.monotonic() - self.playback_started_at
-        self.playback_current_sample = self.playback_started_sample + int(round(elapsed * self.signal.sample_rate))
+        self.playback_current_sample = self.playback_started_sample + int(round(elapsed * self.signal.sample_rate * self.playback_speed))
         if self.playback_current_sample >= end:
             self.stop_playback(finished=True)
             return
@@ -1666,7 +2339,8 @@ class MainWindow(QMainWindow):
             elapsed_text = self.format_seconds(slider_value / self.signal.sample_rate)
             duration_text = self.format_seconds((end - start) / self.signal.sample_rate)
             absolute_text = self.format_seconds(self.playback_current_sample / self.signal.sample_rate)
-            label_text = f"{self.playback_label}: {elapsed_text} / {duration_text}  ({absolute_text})"
+            speed_text = f"  {self.playback_speed:.2f}x"
+            label_text = f"{self.playback_label}: {elapsed_text} / {duration_text}  ({absolute_text}){speed_text}"
             enabled = True
         self._updating_playback_widgets = True
         for slider, label in self.playback_widgets:
@@ -1737,7 +2411,7 @@ class MainWindow(QMainWindow):
             else:
                 try:
                     stop_audio()
-                    play_audio(self.signal.raw_audio[self.playback_current_sample:end], self.signal.sample_rate)
+                    play_audio(self.signal.raw_audio[self.playback_current_sample:end], self.playback_sample_rate())
                 except Exception as exc:
                     self.stop_playback()
                     self.warn("Playback failed", str(exc))

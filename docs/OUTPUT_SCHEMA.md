@@ -15,6 +15,7 @@ It also writes one metadata JSON per processed file:
 ## Segment CSV
 
 Rows are chronological and include both speech and pause segments.
+Each QC group column is stored as JSON text inside the CSV cell.
 
 | Column | Meaning |
 | --- | --- |
@@ -26,29 +27,37 @@ Rows are chronological and include both speech and pause segments.
 | `onset_seconds_absolute` | Segment onset in seconds from the beginning of the original source file. |
 | `offset_seconds_absolute` | Segment offset in seconds from the beginning of the original source file. |
 | `duration_seconds` | Segment duration in seconds. |
-| `audit_json` | JSON object containing selected QC effects. |
+| `Environmental noise` | JSON dictionary for that QC group. Each effect is present. Values are `[]` or `[issue_onset_seconds_absolute, issue_offset_seconds_absolute]`. |
+| `Competing speech` | Same format. |
+| `Volume unstable` | Same format. |
+| `Clipping` | Same format. |
+| `Reverberation/echo` | Same format. |
+| `Platform effects` | Same format. |
+| `Temporal discontinuities` | Same format. |
+| `Any non-task related content` | Same format. |
 
-Example `audit_json`:
+Example QC columns:
 
 ```json
-{
-  "selected_effects": [
-    {
-      "gui_name": "Environmental noise",
-      "effect": "Traffic"
-    },
-    {
-      "gui_name": "Volume unstable",
-      "effect": "Volume too quiet"
-    }
-  ]
+"Environmental noise": {
+  "Traffic": [2.55, 3.04],
+  "HVAC": [],
+  "Pets": [],
+  "TV (non-speech)": [],
+  "Beep": [],
+  "Microphone rubbing": [],
+  "Non-specific environmental noise": []
 }
 ```
 
-If no QC effects are selected, the value is:
+If no effects are selected in a group, every value in that group dictionary is
+an empty list:
 
 ```json
-{"selected_effects": []}
+{
+  "TV (speech)": [],
+  "Other human speakers": []
+}
 ```
 
 ## Pause Position
