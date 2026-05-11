@@ -133,12 +133,19 @@ def audit_group_columns(audit_data: dict) -> dict[str, str]:
         effect = str(item.get("effect", ""))
         if gui_name not in group_values or effect not in group_values[gui_name]:
             continue
-        group_values[gui_name][effect] = audit_time_span(item)
+        group_values[gui_name][effect] = audit_time_spans(item)
     return {gui_name: json.dumps(group_values[gui_name], sort_keys=True) for gui_name in QC_AUDIT_GUI_NAMES}
 
 
-def audit_time_span(item: dict) -> list[float]:
-    region = item.get("issue_region")
+def audit_time_spans(item: dict) -> list[list[float]]:
+    raw_regions = item.get("issue_regions")
+    if isinstance(raw_regions, list):
+        return [span for span in (audit_time_span(region) for region in raw_regions) if span]
+    span = audit_time_span(item.get("issue_region"))
+    return [span] if span else []
+
+
+def audit_time_span(region: object) -> list[float]:
     if not isinstance(region, dict):
         return []
     try:

@@ -10,3 +10,7 @@ sounddevice>=0.4
 
 # Test dependency
 pytest>=7.0
+
+# System dependency for reading misnamed/non-WAV media files:
+# install FFmpeg so both `ffmpeg` and `ffprobe` are available on PATH.
+# macOS: brew install ffmpeg

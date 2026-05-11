@@ -19,6 +19,16 @@ from spa_core.segmentation import run_spa
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_ROOT = PROJECT_ROOT / "outputs"
+QC_AUDIT_COLORS = {
+    "Environmental noise": "#2f80ed",
+    "Competing speech": "#9b51e0",
+    "Volume unstable": "#f2994a",
+    "Clipping": "#d64545",
+    "Reverberation/echo": "#00a676",
+    "Platform effects": "#00a3a3",
+    "Temporal discontinuities": "#6c757d",
+    "Any non-task related content": "#b75d1e",
+}
 BAMBOO_PASSAGE = (
     "Bamboo walls are getting to be very popular. They are strong, easy to use, and good-looking. "
     "They provide a good background and can create a look of a Japanese garden. Bamboo is a grass, "
@@ -223,13 +233,15 @@ class MainWindow(QMainWindow):
         self.boundary_mode = "noise"
         self.boundary_clicks: list[int] = []
         self.audit_by_segment_number: dict[int, dict[str, object]] = {}
-        self.audit_checks: list[tuple[str, QCheckBox]] = []
+        self.audit_checks: list[tuple[str, QCheckBox, QCheckBox]] = []
         self.audit_index = 0
         self.audit_zoom_region: tuple[int, int] | None = None
         self.audit_zoom_clicks: list[int] = []
         self.audit_zoom_selecting = False
         self.audit_issue_key: tuple[str, str] | None = None
         self.audit_issue_clicks: list[int] = []
+        self.audit_issue_edit_index: int | None = None
+        self.review_return_audit_index: int | None = None
         self._updating_audit_checks = False
         self.loaded_from_saved_output = False
         self.last_saved_path: Path | None = None
@@ -566,13 +578,22 @@ class MainWindow(QMainWindow):
         actions = QHBoxLayout()
         self.review_play_full_button = QPushButton("Play Full Audio")
         self.review_play_analysis_button = QPushButton("Play Analysis Region")
+        self.review_return_segment_button = QPushButton("Return To Segment")
+        self.review_segment_combo = QComboBox()
+        self.review_open_segment_button = QPushButton("Open Segment")
         self.review_next_button = QPushButton("Confirm Segmentation")
         self.review_next_button.setObjectName("PrimaryButton")
         self.review_play_full_button.clicked.connect(lambda: self.play_full_audio(self.review_play_full_button))
         self.review_play_analysis_button.clicked.connect(lambda: self.play_analysis_region(self.review_play_analysis_button))
+        self.review_return_segment_button.clicked.connect(self.return_to_review_segment)
+        self.review_open_segment_button.clicked.connect(self.open_review_selected_segment)
         self.review_next_button.clicked.connect(self.confirm_segmentation)
         actions.addWidget(self.review_play_full_button)
         actions.addWidget(self.review_play_analysis_button)
+        actions.addWidget(self.review_return_segment_button)
+        actions.addWidget(QLabel("Segment"))
+        actions.addWidget(self.review_segment_combo, stretch=1)
+        actions.addWidget(self.review_open_segment_button)
         actions.addStretch(1)
         actions.addWidget(self.review_next_button)
         outer.addLayout(actions)
@@ -631,6 +652,21 @@ class MainWindow(QMainWindow):
         qc_title = QLabel("QC Audit")
         qc_title.setObjectName("MetricText")
         right_layout.addWidget(qc_title)
+        visibility_buttons = QHBoxLayout()
+        self.audit_show_all_button = QPushButton("Show All")
+        self.audit_hide_all_button = QPushButton("Hide All")
+        for button, tooltip in (
+            (self.audit_show_all_button, "Show all saved QC windows on the plots"),
+            (self.audit_hide_all_button, "Hide all saved QC windows on the plots"),
+        ):
+            button.setObjectName("CompactButton")
+            button.setToolTip(tooltip)
+            button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.audit_show_all_button.clicked.connect(lambda: self.set_all_audit_visibility(True))
+        self.audit_hide_all_button.clicked.connect(lambda: self.set_all_audit_visibility(False))
+        visibility_buttons.addWidget(self.audit_show_all_button)
+        visibility_buttons.addWidget(self.audit_hide_all_button)
+        right_layout.addLayout(visibility_buttons)
 
         issue_box = QGroupBox("Issue Boundary")
         issue_layout = QVBoxLayout(issue_box)
@@ -638,14 +674,27 @@ class MainWindow(QMainWindow):
         self.audit_issue_status.setWordWrap(True)
         self.audit_issue_status.setObjectName("SubtleText")
         self.audit_issue_combo = QComboBox()
+        self.audit_issue_window_list = QListWidget()
+        self.audit_issue_window_list.setMaximumHeight(88)
+        self.audit_issue_window_list.currentRowChanged.connect(self.on_audit_issue_window_selected)
         issue_buttons = QHBoxLayout()
-        self.audit_issue_edit_button = QPushButton("Edit")
+        self.audit_issue_edit_button = QPushButton("Add/Reset")
         self.audit_issue_play_button = QPushButton("Play")
         self.audit_issue_confirm_button = QPushButton("Confirm")
         for button, tooltip in (
-            (self.audit_issue_edit_button, "Edit the selected issue boundary"),
-            (self.audit_issue_play_button, "Play the selected issue boundary"),
-            (self.audit_issue_confirm_button, "Confirm the selected issue boundary"),
+            (self.audit_issue_edit_button, "Start a new window, or reset the in-progress window"),
+            (self.audit_issue_play_button, "Play the in-progress or selected issue window"),
+            (self.audit_issue_confirm_button, "Confirm and save this issue window"),
+        ):
+            button.setObjectName("CompactButton")
+            button.setToolTip(tooltip)
+            button.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        window_buttons = QHBoxLayout()
+        self.audit_issue_window_edit_button = QPushButton("Edit Window")
+        self.audit_issue_window_remove_button = QPushButton("Remove Window")
+        for button, tooltip in (
+            (self.audit_issue_window_edit_button, "Edit the selected saved window"),
+            (self.audit_issue_window_remove_button, "Remove the selected saved window"),
         ):
             button.setObjectName("CompactButton")
             button.setToolTip(tooltip)
@@ -654,12 +703,18 @@ class MainWindow(QMainWindow):
         self.audit_issue_play_button.clicked.connect(lambda: self.play_selected_issue_boundary(self.audit_issue_play_button))
         self.audit_issue_confirm_button.clicked.connect(self.confirm_audit_issue_boundary)
         self.audit_issue_combo.currentIndexChanged.connect(self.on_audit_issue_combo_changed)
+        self.audit_issue_window_edit_button.clicked.connect(self.edit_selected_issue_window)
+        self.audit_issue_window_remove_button.clicked.connect(self.remove_selected_issue_window)
         issue_buttons.addWidget(self.audit_issue_edit_button)
         issue_buttons.addWidget(self.audit_issue_play_button)
         issue_buttons.addWidget(self.audit_issue_confirm_button)
+        window_buttons.addWidget(self.audit_issue_window_edit_button)
+        window_buttons.addWidget(self.audit_issue_window_remove_button)
         issue_layout.addWidget(self.audit_issue_status)
         issue_layout.addWidget(self.audit_issue_combo)
+        issue_layout.addWidget(self.audit_issue_window_list)
         issue_layout.addLayout(issue_buttons)
+        issue_layout.addLayout(window_buttons)
         right_layout.addWidget(issue_box)
 
         qc_container = QWidget()
@@ -672,10 +727,20 @@ class MainWindow(QMainWindow):
             group_layout = QVBoxLayout(group)
             group_layout.setSpacing(4)
             for effect in effects:
+                row = QHBoxLayout()
+                row.setSpacing(6)
                 check = QCheckBox(effect)
                 check.toggled.connect(lambda checked, gui_name=gui_name, check=check: self.on_audit_check_toggled(gui_name, check, checked))
-                self.audit_checks.append((gui_name, check))
-                group_layout.addWidget(check)
+                visible = QCheckBox("Show")
+                visible.setObjectName("VisibilityCheck")
+                visible.setToolTip("Show or hide this artifact's marked windows on the plots")
+                visible.setChecked(False)
+                visible.setEnabled(False)
+                visible.toggled.connect(lambda checked, gui_name=gui_name, check=check: self.on_audit_visibility_toggled(gui_name, check, checked))
+                self.audit_checks.append((gui_name, check, visible))
+                row.addWidget(check, stretch=1)
+                row.addWidget(visible)
+                group_layout.addLayout(row)
             qc_layout.addWidget(group)
         qc_layout.addStretch(1)
 
@@ -692,6 +757,9 @@ class MainWindow(QMainWindow):
         self.audit_zoom_select_button = QPushButton("Select Zoom")
         self.audit_zoom_play_button = QPushButton("Play Zoom")
         self.audit_zoom_reset_button = QPushButton("Reset Zoom")
+        self.audit_review_button = QPushButton("View Segmentation")
+        self.audit_segment_combo = QComboBox()
+        self.audit_go_segment_button = QPushButton("Go")
         speed_label = QLabel("Speed")
         self.audit_speed_combo = QComboBox()
         for label, value in (
@@ -711,6 +779,8 @@ class MainWindow(QMainWindow):
         self.audit_zoom_select_button.clicked.connect(self.start_audit_zoom_selection)
         self.audit_zoom_play_button.clicked.connect(lambda: self.play_current_audit_zoom(self.audit_zoom_play_button))
         self.audit_zoom_reset_button.clicked.connect(self.reset_audit_zoom)
+        self.audit_review_button.clicked.connect(self.view_segmentation_from_audit)
+        self.audit_go_segment_button.clicked.connect(self.go_to_audit_selected_segment)
         self.audit_speed_combo.currentIndexChanged.connect(self.on_playback_speed_changed)
         previous.clicked.connect(self.previous_audit_segment)
         next_button.clicked.connect(self.next_audit_segment)
@@ -720,6 +790,10 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.audit_zoom_select_button)
         actions.addWidget(self.audit_zoom_play_button)
         actions.addWidget(self.audit_zoom_reset_button)
+        actions.addWidget(self.audit_review_button)
+        actions.addWidget(QLabel("Segment"))
+        actions.addWidget(self.audit_segment_combo, stretch=1)
+        actions.addWidget(self.audit_go_segment_button)
         actions.addWidget(speed_label)
         actions.addWidget(self.audit_speed_combo)
         actions.addStretch(1)
@@ -815,6 +889,10 @@ class MainWindow(QMainWindow):
                 padding: 6px 8px;
                 min-width: 0;
             }
+            QCheckBox#VisibilityCheck {
+                font-size: 11px;
+                color: #59646b;
+            }
             QFrame#PlaybackBar {
                 background: #ffffff;
                 border: 1px solid #d7dcdf;
@@ -878,16 +956,16 @@ class MainWindow(QMainWindow):
             self._show_page(PAGE_BOUNDARIES)
         elif page == PAGE_AUDIT:
             if self.audit_index > 0:
-                if not self.ensure_current_audit_resolved():
+                if not self.ensure_audit_progress_saved_for_navigation():
                     return
-                self.store_current_audit()
                 self.audit_index -= 1
                 self.clear_audit_zoom()
                 self.clear_audit_issue_selection()
                 self.load_audit_segment()
             else:
-                if not self.ensure_current_audit_resolved():
+                if not self.ensure_audit_progress_saved_for_navigation():
                     return
+                self.review_return_audit_index = 0
                 self._show_page(PAGE_REVIEW)
         elif page == PAGE_SAVE:
             if self.result is not None and len(self.audit_segments()) > 0:
@@ -910,6 +988,7 @@ class MainWindow(QMainWindow):
             self.result = None
             self.audit_by_segment_number = {}
             self.audit_index = 0
+            self.review_return_audit_index = None
             if self.settings.use_full_file:
                 self.analysis_region = (0, len(self.signal.raw_audio))
             self._show_page(PAGE_BOUNDARIES)
@@ -1036,6 +1115,7 @@ class MainWindow(QMainWindow):
         self.boundary_clicks = []
         self.audit_by_segment_number = {}
         self.audit_index = 0
+        self.review_return_audit_index = None
         self.clear_audit_zoom()
         self.clear_audit_issue_selection()
         self.loaded_from_saved_output = False
@@ -1063,6 +1143,7 @@ class MainWindow(QMainWindow):
         self.boundary_clicks = []
         self.audit_by_segment_number = audit_by_segment_number
         self.audit_index = 0
+        self.review_return_audit_index = None
         self.clear_audit_zoom()
         self.clear_audit_issue_selection()
         self.loaded_from_saved_output = True
@@ -1176,15 +1257,13 @@ class MainWindow(QMainWindow):
                 continue
             data = self.parse_saved_audit_group(row.get(gui_name))
             for effect in effects:
-                time_span = data.get(effect, [])
-                if not isinstance(time_span, list) or len(time_span) < 2:
-                    continue
-                region = self.issue_region_json_from_seconds(time_span[0], time_span[1], sample_rate)
-                if not region:
+                regions = self.issue_region_jsons_from_time_value(data.get(effect, []), sample_rate)
+                if not regions:
                     continue
                 item = {"gui_name": gui_name, "effect": effect}
                 item.update(self.qc_metadata_for_effect(gui_name, effect))
-                item["issue_region"] = region
+                item["visible"] = True
+                item["issue_regions"] = regions
                 selected_effects.append(item)
         return {"selected_effects": selected_effects}
 
@@ -1196,6 +1275,21 @@ class MainWindow(QMainWindow):
         except json.JSONDecodeError:
             return {}
         return data if isinstance(data, dict) else {}
+
+    def issue_region_jsons_from_time_value(self, value: object, sample_rate: int) -> list[dict[str, float | int]]:
+        if not isinstance(value, list) or not value:
+            return []
+        if len(value) >= 2 and all(isinstance(item, (int, float)) for item in value[:2]):
+            region = self.issue_region_json_from_seconds(value[0], value[1], sample_rate)
+            return [region] if region else []
+        regions = []
+        for time_span in value:
+            if not isinstance(time_span, list) or len(time_span) < 2:
+                continue
+            region = self.issue_region_json_from_seconds(time_span[0], time_span[1], sample_rate)
+            if region:
+                regions.append(region)
+        return regions
 
     def issue_region_json_from_seconds(self, start_seconds: object, end_seconds: object, sample_rate: int) -> dict[str, float | int]:
         try:
@@ -1430,6 +1524,7 @@ class MainWindow(QMainWindow):
             return
         self.audit_by_segment_number = {}
         self.audit_index = 0
+        self.review_return_audit_index = None
         self.clear_audit_zoom()
         self.clear_audit_issue_selection()
         self.loaded_from_saved_output = False
@@ -1469,9 +1564,111 @@ class MainWindow(QMainWindow):
             f"{speech_count} speech segments  |  {pause_count} pauses  |  Analysis {analysis_start / fs:.3f}s to {analysis_end / fs:.3f}s"
         )
         self.review_next_button.setText("Next Page" if self.loaded_from_saved_output else "Confirm Segmentation")
+        self.update_review_segment_controls()
         self.set_playback_range(analysis_start, analysis_end, "Analysis Region", reset_position=True)
         self.review_canvas.draw_idle()
         self.update_playback_markers()
+
+    def segment_label(self, index: int, segment: dict[str, object]) -> str:
+        if self.signal is None:
+            return f"Segment {index + 1}"
+        start = float(segment["start"]) / self.signal.sample_rate
+        end = float(segment["end"]) / self.signal.sample_rate
+        segment_type = str(segment["segment_type"]).title()
+        return f"{index + 1}: {segment_type} {start:.3f}s-{end:.3f}s"
+
+    def populate_segment_combo(self, combo: QComboBox, selected_index: int | None = None) -> None:
+        segments = self.audit_segments()
+        combo.blockSignals(True)
+        combo.clear()
+        for index, segment in enumerate(segments):
+            combo.addItem(self.segment_label(index, segment), index)
+        if segments:
+            next_index = selected_index if selected_index is not None else self.audit_index
+            next_index = max(0, min(len(segments) - 1, next_index))
+            combo.setCurrentIndex(next_index)
+        combo.blockSignals(False)
+        combo.setEnabled(bool(segments))
+
+    def selected_segment_index_from_combo(self, combo: QComboBox) -> int | None:
+        value = combo.currentData()
+        return int(value) if isinstance(value, int) else None
+
+    def update_review_segment_controls(self) -> None:
+        if not hasattr(self, "review_segment_combo"):
+            return
+        segments = self.audit_segments()
+        selected_index = self.review_return_audit_index if self.review_return_audit_index is not None else self.audit_index
+        self.populate_segment_combo(self.review_segment_combo, selected_index)
+        self.review_open_segment_button.setEnabled(bool(segments))
+        has_return = self.review_return_audit_index is not None and bool(segments)
+        self.review_return_segment_button.setEnabled(has_return)
+        self.review_return_segment_button.setText(f"Return To Segment {self.review_return_audit_index + 1}" if has_return else "Return To Segment")
+
+    def update_audit_segment_controls(self) -> None:
+        if not hasattr(self, "audit_segment_combo"):
+            return
+        segments = self.audit_segments()
+        self.populate_segment_combo(self.audit_segment_combo, self.audit_index)
+        self.audit_go_segment_button.setEnabled(bool(segments))
+        self.audit_review_button.setEnabled(bool(segments))
+
+    def open_review_selected_segment(self) -> None:
+        index = self.selected_segment_index_from_combo(self.review_segment_combo)
+        if index is None:
+            return
+        self.review_return_audit_index = None
+        self.jump_to_audit_segment(index)
+
+    def return_to_review_segment(self) -> None:
+        if self.review_return_audit_index is None:
+            return
+        index = self.review_return_audit_index
+        self.review_return_audit_index = None
+        self.jump_to_audit_segment(index)
+
+    def go_to_audit_selected_segment(self) -> None:
+        index = self.selected_segment_index_from_combo(self.audit_segment_combo)
+        if index is None or index == self.audit_index:
+            return
+        self.jump_to_audit_segment(index)
+
+    def view_segmentation_from_audit(self) -> None:
+        if self.result is None:
+            return
+        if not self.ensure_audit_progress_saved_for_navigation():
+            return
+        self.review_return_audit_index = self.audit_index
+        self.clear_audit_zoom()
+        self.clear_audit_issue_selection()
+        self._show_page(PAGE_REVIEW)
+
+    def jump_to_audit_segment(self, index: int) -> None:
+        segments = self.audit_segments()
+        if not segments:
+            return
+        if self.stack.currentIndex() == PAGE_AUDIT:
+            if not self.ensure_audit_progress_saved_for_navigation():
+                return
+        self.audit_index = max(0, min(len(segments) - 1, index))
+        self.clear_audit_zoom()
+        self.clear_audit_issue_selection()
+        if self.stack.currentIndex() == PAGE_AUDIT:
+            self.load_audit_segment()
+        else:
+            self._show_page(PAGE_AUDIT)
+
+    def ensure_audit_progress_saved_for_navigation(self) -> bool:
+        if self.audit_issue_key is not None and self.audit_issue_clicks:
+            self.warn(
+                "Issue window in progress",
+                "Confirm the current issue window, or use Add/Reset to clear it, before leaving this segment.",
+            )
+            return False
+        if not self.ensure_current_audit_resolved():
+            return False
+        self.store_current_audit()
+        return True
 
     def confirm_segmentation(self) -> None:
         if self.result is None:
@@ -1499,10 +1696,19 @@ class MainWindow(QMainWindow):
             for item in data.get("selected_effects", [])
             if isinstance(item, dict)
         }
+        visible_effects = {
+            (str(item.get("gui_name", "")), str(item.get("effect", ""))): bool(item.get("visible", True))
+            for item in data.get("selected_effects", [])
+            if isinstance(item, dict)
+        }
         legacy_issues = set(data.get("issues", []))
         self._updating_audit_checks = True
-        for gui_name, check in self.audit_checks:
-            check.setChecked((gui_name, check.text()) in selected_effects or check.text() in legacy_issues)
+        for gui_name, check, visible in self.audit_checks:
+            key = (gui_name, check.text())
+            selected = key in selected_effects or check.text() in legacy_issues
+            check.setChecked(selected)
+            visible.setEnabled(selected)
+            visible.setChecked(selected and visible_effects.get(key, True))
         self._updating_audit_checks = False
         self.clear_audit_issue_selection()
         self.audit_previous_button.setEnabled(self.audit_index > 0)
@@ -1553,6 +1759,7 @@ class MainWindow(QMainWindow):
             self.set_playback_range(start, end, f"{segment_type.title()} Segment {self.audit_index + 1}", reset_position=True)
         self.update_audit_zoom_controls()
         self.update_audit_issue_controls()
+        self.update_audit_segment_controls()
         self.audit_canvas.draw_idle()
         self.update_playback_markers()
 
@@ -1573,9 +1780,17 @@ class MainWindow(QMainWindow):
     def clear_audit_issue_selection(self) -> None:
         self.audit_issue_key = None
         self.audit_issue_clicks = []
+        self.audit_issue_edit_index = None
 
     def selected_audit_keys(self) -> list[tuple[str, str]]:
-        return [(gui_name, check.text()) for gui_name, check in self.audit_checks if check.isChecked()]
+        return [(gui_name, check.text()) for gui_name, check, _visible in self.audit_checks if check.isChecked()]
+
+    def visible_audit_keys(self) -> set[tuple[str, str]]:
+        return {
+            (gui_name, check.text())
+            for gui_name, check, visible in self.audit_checks
+            if check.isChecked() and visible.isChecked()
+        }
 
     def current_audit_effect_map(self) -> dict[tuple[str, str], dict[str, object]]:
         segment_number = self.audit_index + 1
@@ -1590,11 +1805,27 @@ class MainWindow(QMainWindow):
                 effects[(gui_name, effect)] = dict(item)
         return effects
 
+    def audit_color_for_key(self, key: tuple[str, str] | None) -> str:
+        if key is None:
+            return "#c43c39"
+        return QC_AUDIT_COLORS.get(key[0], "#c43c39")
+
     def issue_region_from_entry(self, entry: dict[str, object] | None) -> tuple[int, int] | None:
+        regions = self.issue_regions_from_entry(entry)
+        return regions[-1] if regions else None
+
+    def issue_regions_from_entry(self, entry: dict[str, object] | None) -> list[tuple[int, int]]:
         if self.signal is None or not isinstance(entry, dict):
-            return None
-        region = entry.get("issue_region")
-        if not isinstance(region, dict):
+            return []
+        raw_regions = entry.get("issue_regions")
+        if isinstance(raw_regions, list):
+            regions = [self.issue_region_tuple_from_json(region) for region in raw_regions]
+            return [region for region in regions if region is not None]
+        legacy_region = self.issue_region_tuple_from_json(entry.get("issue_region"))
+        return [legacy_region] if legacy_region is not None else []
+
+    def issue_region_tuple_from_json(self, region: object) -> tuple[int, int] | None:
+        if self.signal is None or not isinstance(region, dict):
             return None
         try:
             if "onset_sample_absolute" in region and "offset_sample_absolute" in region:
@@ -1614,6 +1845,9 @@ class MainWindow(QMainWindow):
         if end <= start:
             return None
         return start, end
+
+    def issue_region_jsons_from_entry(self, entry: dict[str, object] | None) -> list[dict[str, float | int]]:
+        return [self.issue_region_json(start, end) for start, end in self.issue_regions_from_entry(entry)]
 
     def issue_region_json(self, start: int, end: int) -> dict[str, float | int]:
         if self.signal is None:
@@ -1639,6 +1873,36 @@ class MainWindow(QMainWindow):
             self.audit_issue_combo.setCurrentIndex(selected_keys.index(current))
         self.audit_issue_combo.blockSignals(False)
 
+    def selected_issue_window_index(self) -> int | None:
+        if not hasattr(self, "audit_issue_window_list"):
+            return None
+        item = self.audit_issue_window_list.currentItem()
+        if item is None:
+            return None
+        value = item.data(Qt.UserRole)
+        return int(value) if isinstance(value, int) else None
+
+    def update_audit_issue_window_list(self, preferred_index: int | None = None) -> None:
+        if not hasattr(self, "audit_issue_window_list"):
+            return
+        current_index = preferred_index if preferred_index is not None else self.selected_issue_window_index()
+        selected_key = self.audit_issue_combo.currentData()
+        regions = []
+        if selected_key in self.selected_audit_keys():
+            regions = self.issue_regions_from_entry(self.current_audit_effect_map().get(selected_key))
+
+        self.audit_issue_window_list.blockSignals(True)
+        self.audit_issue_window_list.clear()
+        for index, (start, end) in enumerate(regions):
+            label = f"Window {index + 1}: {start / self.signal.sample_rate:.3f}s to {end / self.signal.sample_rate:.3f}s" if self.signal is not None else f"Window {index + 1}"
+            self.audit_issue_window_list.addItem(label)
+            item = self.audit_issue_window_list.item(self.audit_issue_window_list.count() - 1)
+            item.setData(Qt.UserRole, index)
+        if regions:
+            next_index = current_index if current_index is not None and 0 <= current_index < len(regions) else len(regions) - 1
+            self.audit_issue_window_list.setCurrentRow(next_index)
+        self.audit_issue_window_list.blockSignals(False)
+
     def update_audit_issue_controls(self, preferred_key: tuple[str, str] | None = None) -> None:
         if not hasattr(self, "audit_issue_status"):
             return
@@ -1647,36 +1911,44 @@ class MainWindow(QMainWindow):
         selected_key = self.audit_issue_combo.currentData()
         selected_keys = self.selected_audit_keys()
         effect_map = self.current_audit_effect_map()
+        self.update_audit_issue_window_list(self.audit_issue_edit_index)
+        selected_window_index = self.selected_issue_window_index()
         self.audit_issue_edit_button.setEnabled(selected_key in selected_keys)
         self.audit_issue_play_button.setEnabled(self.current_issue_boundary_play_range() is not None)
         self.audit_issue_confirm_button.setEnabled(self.audit_issue_key is not None and len(self.audit_issue_clicks) >= 2)
+        self.audit_issue_window_edit_button.setEnabled(selected_key in selected_keys and selected_window_index is not None)
+        self.audit_issue_window_remove_button.setEnabled(selected_key in selected_keys and selected_window_index is not None)
         if self.audit_issue_key is not None:
             gui_name, effect = self.audit_issue_key
             if len(self.audit_issue_clicks) == 0:
-                self.audit_issue_status.setText(f"{gui_name}: {effect} needs a boundary. Click the issue start time on either plot, or uncheck it.")
+                saved_count = len(self.issue_regions_from_entry(effect_map.get(self.audit_issue_key)))
+                suffix = f" {saved_count} window(s) already saved." if saved_count else ""
+                self.audit_issue_status.setText(f"{gui_name}: {effect} needs a window. Click the issue start time on either plot, or uncheck it.{suffix}")
             elif len(self.audit_issue_clicks) == 1 and self.signal is not None:
                 seconds = self.audit_issue_clicks[0] / self.signal.sample_rate
                 self.audit_issue_status.setText(f"{gui_name}: {effect} start set at {seconds:.3f}s. Click the issue end time.")
             else:
-                self.audit_issue_status.setText(f"{gui_name}: {effect} boundary selected. Click Confirm Boundary, or uncheck it to undo.")
+                action = "replace the selected window" if self.audit_issue_edit_index is not None else "add it"
+                self.audit_issue_status.setText(f"{gui_name}: {effect} window selected. Click Confirm to {action}, or Add/Reset to start over.")
             return
         if selected_key in selected_keys:
             entry = effect_map.get(selected_key)
-            region = self.issue_region_from_entry(entry)
+            regions = self.issue_regions_from_entry(entry)
             gui_name, effect = selected_key
-            if region is not None and self.signal is not None:
-                start, end = region
-                self.audit_issue_status.setText(f"{gui_name}: {effect} boundary {start / self.signal.sample_rate:.3f}s to {end / self.signal.sample_rate:.3f}s. Use Edit Boundary to adjust.")
+            if regions and self.signal is not None:
+                start, end = regions[-1]
+                self.audit_issue_status.setText(f"{gui_name}: {effect} has {len(regions)} window(s). Latest {start / self.signal.sample_rate:.3f}s to {end / self.signal.sample_rate:.3f}s. Use Add/Reset for another.")
             else:
-                self.audit_issue_status.setText(f"{gui_name}: {effect} needs a boundary. Use Edit Boundary or uncheck it.")
+                self.audit_issue_status.setText(f"{gui_name}: {effect} needs a window. Use Add/Reset or uncheck it.")
         else:
             self.audit_issue_status.setText("Check a QC artifact to set where it occurs.")
 
     def update_audit_check_enabled_states(self) -> None:
         pending_key = self.audit_issue_key
-        for gui_name, check in self.audit_checks:
+        for gui_name, check, visible in self.audit_checks:
             key = (gui_name, check.text())
             check.setEnabled(pending_key is None or key == pending_key)
+            visible.setEnabled(check.isChecked() and (pending_key is None or key == pending_key))
 
     def current_issue_boundary_play_range(self) -> tuple[int, int, str] | None:
         if self.signal is None:
@@ -1688,17 +1960,20 @@ class MainWindow(QMainWindow):
                 return start, end, f"Issue Boundary: {effect}"
         selected_key = self.audit_issue_combo.currentData() if hasattr(self, "audit_issue_combo") else None
         if selected_key in self.selected_audit_keys():
-            region = self.issue_region_from_entry(self.current_audit_effect_map().get(selected_key))
-            if region is not None:
+            regions = self.issue_regions_from_entry(self.current_audit_effect_map().get(selected_key))
+            if regions:
                 _, effect = selected_key
-                start, end = region
-                return start, end, f"Issue Boundary: {effect}"
+                selected_index = self.selected_issue_window_index()
+                if selected_index is None or selected_index >= len(regions):
+                    selected_index = len(regions) - 1
+                start, end = regions[selected_index]
+                return start, end, f"Issue Boundary: {effect} window {selected_index + 1}"
         return None
 
     def play_selected_issue_boundary(self, button: QPushButton | None = None) -> None:
         play_range = self.current_issue_boundary_play_range()
         if play_range is None:
-            self.warn("No boundary selected", "Select and confirm an issue boundary, or click both boundary points before playing it.")
+            self.warn("No window selected", "Select a saved issue window, or click both boundary points before playing an in-progress window.")
             return
         start, end, label = play_range
         self.toggle_playback(start, end, label, button)
@@ -1708,18 +1983,33 @@ class MainWindow(QMainWindow):
             return
         fs = self.signal.sample_rate
         effect_map = self.current_audit_effect_map()
-        selected_keys = set(self.selected_audit_keys())
+        selected_keys = self.visible_audit_keys()
         for key in selected_keys:
-            region = self.issue_region_from_entry(effect_map.get(key))
-            if region is None:
-                continue
-            color = "#c43c39" if key != self.audit_issue_key else "#f28e2b"
-            start, end = region
+            color = self.audit_color_for_key(key)
+            for start, end in self.issue_regions_from_entry(effect_map.get(key)):
+                for ax in (self.audit_ax, self.audit_ax_spec):
+                    ax.axvspan(start / fs, end / fs, color=color, alpha=0.18)
+
+        selected_key = self.audit_issue_combo.currentData() if hasattr(self, "audit_issue_combo") else None
+        selected_index = self.selected_issue_window_index()
+        if selected_key in self.selected_audit_keys() and selected_index is not None:
+            regions = self.issue_regions_from_entry(effect_map.get(selected_key))
+            if 0 <= selected_index < len(regions):
+                start, end = regions[selected_index]
+                color = self.audit_color_for_key(selected_key)
+                for ax in (self.audit_ax, self.audit_ax_spec):
+                    ax.axvspan(start / fs, end / fs, facecolor=color, edgecolor="#101820", linewidth=1.6, alpha=0.34)
+                    ax.axvline(start / fs, color="#101820", linewidth=1.2)
+                    ax.axvline(end / fs, color="#101820", linewidth=1.2)
+
+        if self.audit_issue_key is not None and len(self.audit_issue_clicks) >= 2:
+            start, end = sorted(self.audit_issue_clicks[:2])
+            color = self.audit_color_for_key(self.audit_issue_key)
             for ax in (self.audit_ax, self.audit_ax_spec):
-                ax.axvspan(start / fs, end / fs, color=color, alpha=0.18)
+                ax.axvspan(start / fs, end / fs, facecolor=color, edgecolor="#101820", linewidth=1.6, alpha=0.30)
         for click in self.audit_issue_clicks:
             for ax in (self.audit_ax, self.audit_ax_spec):
-                ax.axvline(click / fs, color="#c43c39", linewidth=1.3, linestyle="--")
+                ax.axvline(click / fs, color=self.audit_color_for_key(self.audit_issue_key), linewidth=1.5, linestyle="--")
 
     def update_audit_zoom_controls(self) -> None:
         if not hasattr(self, "audit_zoom_select_button"):
@@ -1811,6 +2101,10 @@ class MainWindow(QMainWindow):
         if self._updating_audit_checks:
             return
         key = (gui_name, check.text())
+        visible = self.visibility_check_for_key(key)
+        if visible is not None:
+            visible.setEnabled(checked)
+            visible.setChecked(checked)
         if checked:
             self.store_current_audit()
             if self.issue_region_from_entry(self.current_audit_effect_map().get(key)) is None:
@@ -1825,6 +2119,32 @@ class MainWindow(QMainWindow):
         self.update_audit_issue_controls()
         self.plot_audit_segment()
 
+    def on_audit_visibility_toggled(self, gui_name: str, check: QCheckBox, checked: bool) -> None:
+        if self._updating_audit_checks:
+            return
+        if not check.isChecked():
+            return
+        self.store_current_audit()
+        self.plot_audit_segment()
+
+    def set_all_audit_visibility(self, visible_state: bool) -> None:
+        if self.result is None:
+            return
+        self._updating_audit_checks = True
+        for _gui_name, check, visible in self.audit_checks:
+            if check.isChecked():
+                visible.setChecked(visible_state)
+        self._updating_audit_checks = False
+        self.store_current_audit()
+        self.update_audit_issue_controls()
+        self.plot_audit_segment()
+
+    def visibility_check_for_key(self, key: tuple[str, str]) -> QCheckBox | None:
+        for gui_name, check, visible in self.audit_checks:
+            if (gui_name, check.text()) == key:
+                return visible
+        return None
+
     def on_audit_issue_combo_changed(self) -> None:
         if self.audit_issue_key is None:
             self.update_audit_issue_controls()
@@ -1833,6 +2153,7 @@ class MainWindow(QMainWindow):
         self.stop_playback()
         self.audit_issue_key = key
         self.audit_issue_clicks = []
+        self.audit_issue_edit_index = None
         self.update_audit_issue_controls(key)
         self.plot_audit_segment()
 
@@ -1841,6 +2162,52 @@ class MainWindow(QMainWindow):
         if key not in self.selected_audit_keys():
             return
         self.start_issue_boundary_selection(key)
+
+    def on_audit_issue_window_selected(self) -> None:
+        if self.audit_issue_key is None:
+            self.update_audit_issue_controls()
+            self.plot_audit_segment()
+
+    def edit_selected_issue_window(self) -> None:
+        key = self.audit_issue_combo.currentData()
+        selected_index = self.selected_issue_window_index()
+        if key not in self.selected_audit_keys() or selected_index is None:
+            return
+        regions = self.issue_regions_from_entry(self.current_audit_effect_map().get(key))
+        if selected_index >= len(regions):
+            return
+        self.stop_playback()
+        self.audit_issue_key = key
+        self.audit_issue_edit_index = selected_index
+        self.audit_issue_clicks = [regions[selected_index][0], regions[selected_index][1]]
+        self.update_audit_issue_controls(key)
+        self.plot_audit_segment()
+
+    def remove_selected_issue_window(self) -> None:
+        key = self.audit_issue_combo.currentData()
+        selected_index = self.selected_issue_window_index()
+        if key not in self.selected_audit_keys() or selected_index is None:
+            return
+        self.store_current_audit()
+        segment_number = self.audit_index + 1
+        data = self.audit_by_segment_number.setdefault(segment_number, {"selected_effects": []})
+        effects = [item for item in data.get("selected_effects", []) if isinstance(item, dict)]
+        for item in effects:
+            if (str(item.get("gui_name", "")), str(item.get("effect", ""))) != key:
+                continue
+            regions = self.issue_region_jsons_from_entry(item)
+            if 0 <= selected_index < len(regions):
+                del regions[selected_index]
+            item["issue_regions"] = regions
+            item.pop("issue_region", None)
+            break
+        data["selected_effects"] = effects
+        if self.audit_issue_key == key:
+            self.clear_audit_issue_selection()
+        next_index = max(0, selected_index - 1)
+        self.update_audit_issue_controls(key)
+        self.update_audit_issue_window_list(next_index)
+        self.plot_audit_segment()
 
     def confirm_audit_issue_boundary(self) -> None:
         if self.signal is None or self.audit_issue_key is None or len(self.audit_issue_clicks) < 2:
@@ -1852,13 +2219,14 @@ class MainWindow(QMainWindow):
             self.update_audit_issue_controls()
             self.plot_audit_segment()
             return
-        self.set_issue_region_for_key(self.audit_issue_key, (start, end))
+        confirmed_index = self.set_issue_region_for_key(self.audit_issue_key, (start, end))
         confirmed_key = self.audit_issue_key
         self.clear_audit_issue_selection()
         self.update_audit_issue_controls(confirmed_key)
+        self.update_audit_issue_window_list(confirmed_index)
         self.plot_audit_segment()
 
-    def set_issue_region_for_key(self, key: tuple[str, str], region: tuple[int, int]) -> None:
+    def set_issue_region_for_key(self, key: tuple[str, str], region: tuple[int, int]) -> int:
         self.store_current_audit()
         segment_number = self.audit_index + 1
         data = self.audit_by_segment_number.setdefault(segment_number, {"selected_effects": []})
@@ -1866,21 +2234,31 @@ class MainWindow(QMainWindow):
         for item in effects:
             if (str(item.get("gui_name", "")), str(item.get("effect", ""))) == key:
                 item.update(self.qc_metadata_for_effect(*key))
-                item["issue_region"] = self.issue_region_json(*region)
+                regions = self.issue_region_jsons_from_entry(item)
+                if self.audit_issue_edit_index is not None and 0 <= self.audit_issue_edit_index < len(regions):
+                    target_index = self.audit_issue_edit_index
+                    regions[target_index] = self.issue_region_json(*region)
+                else:
+                    target_index = len(regions)
+                    regions.append(self.issue_region_json(*region))
+                item["issue_regions"] = regions
+                item.pop("issue_region", None)
                 data["selected_effects"] = effects
-                return
+                return target_index
         gui_name, effect = key
         item = {"gui_name": gui_name, "effect": effect}
         item.update(self.qc_metadata_for_effect(gui_name, effect))
-        item["issue_region"] = self.issue_region_json(*region)
+        item["visible"] = True
+        item["issue_regions"] = [self.issue_region_json(*region)]
         effects.append(item)
         data["selected_effects"] = effects
+        return 0
 
     def unresolved_audit_issue_keys(self) -> list[tuple[str, str]]:
         effect_map = self.current_audit_effect_map()
         unresolved = []
         for key in self.selected_audit_keys():
-            if self.issue_region_from_entry(effect_map.get(key)) is None:
+            if not self.issue_regions_from_entry(effect_map.get(key)):
                 unresolved.append(key)
         if self.audit_issue_key is not None and self.audit_issue_key not in unresolved:
             unresolved.append(self.audit_issue_key)
@@ -1898,7 +2276,7 @@ class MainWindow(QMainWindow):
         else:
             self.start_issue_boundary_selection(key)
         gui_name, effect = key
-        self.warn("Issue boundary required", f"Set a boundary for {gui_name}: {effect}, or uncheck that QC option before moving on.")
+        self.warn("Issue boundary required", f"Set at least one window for {gui_name}: {effect}, or uncheck that QC option before moving on.")
         return False
 
     def plot_audit_spectrogram(self, audio: np.ndarray, absolute_start_sample: int, sample_rate: int) -> None:
@@ -1954,19 +2332,21 @@ class MainWindow(QMainWindow):
         segment_number = self.audit_index + 1
         existing = self.current_audit_effect_map()
         selected_effects = [
-            self.stored_audit_effect(gui_name, check.text(), existing.get((gui_name, check.text())))
-            for gui_name, check in self.audit_checks
+            self.stored_audit_effect(gui_name, check.text(), visible.isChecked(), existing.get((gui_name, check.text())))
+            for gui_name, check, visible in self.audit_checks
             if check.isChecked()
         ]
         self.audit_by_segment_number[segment_number] = {
             "selected_effects": selected_effects,
         }
 
-    def stored_audit_effect(self, gui_name: str, effect: str, existing: dict[str, object] | None) -> dict[str, object]:
+    def stored_audit_effect(self, gui_name: str, effect: str, visible: bool, existing: dict[str, object] | None) -> dict[str, object]:
         item: dict[str, object] = {"gui_name": gui_name, "effect": effect}
         item.update(self.qc_metadata_for_effect(gui_name, effect))
-        if isinstance(existing, dict) and self.issue_region_from_entry(existing) is not None:
-            item["issue_region"] = existing["issue_region"]
+        item["visible"] = bool(visible)
+        regions = self.issue_region_jsons_from_entry(existing)
+        if regions:
+            item["issue_regions"] = regions
         return item
 
     def qc_metadata_for_effect(self, gui_name: str, effect: str) -> dict[str, str]:
@@ -1975,9 +2355,8 @@ class MainWindow(QMainWindow):
     def previous_audit_segment(self) -> None:
         if self.audit_index <= 0:
             return
-        if not self.ensure_current_audit_resolved():
+        if not self.ensure_audit_progress_saved_for_navigation():
             return
-        self.store_current_audit()
         self.audit_index -= 1
         self.clear_audit_zoom()
         self.clear_audit_issue_selection()
@@ -1986,9 +2365,8 @@ class MainWindow(QMainWindow):
     def next_audit_segment(self) -> None:
         if self.result is None:
             return
-        if not self.ensure_current_audit_resolved():
+        if not self.ensure_audit_progress_saved_for_navigation():
             return
-        self.store_current_audit()
         if self.audit_index >= len(self.audit_segments()) - 1:
             self._show_page(PAGE_SAVE)
             return
@@ -2043,6 +2421,7 @@ class MainWindow(QMainWindow):
         self.noise_region = None
         self.analysis_region = None
         self.audit_by_segment_number = {}
+        self.review_return_audit_index = None
         self.queue_index = len(self.queue) - 1 if self.queue else -1
         self.refresh_queue_display()
         self._show_page(PAGE_LOAD)

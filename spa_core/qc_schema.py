@@ -18,6 +18,20 @@ QC_AUDIT_SCHEMA = [
         "potential_human_qc_linking": "Background noise",
     },
     {
+        "artifact_family": "Temporal discontinuities",
+        "physical_phenomenon": "Disruptions in time structure of the signal",
+        "gui_name": "Any non-task related content",
+        "effects": [
+            "Extra or filler word",
+            "Missed word",
+            "Lip smacking/mouth sounds",
+            "Mouse clicking/keyboard noise",
+            "Laughing",
+            "Coughing",
+        ],
+        "potential_human_qc_linking": "NA",
+    },
+    {
         "artifact_family": "Additive interference",
         "physical_phenomenon": "External signals superimposed on speech",
         "gui_name": "Competing speech",
@@ -64,20 +78,6 @@ QC_AUDIT_SCHEMA = [
         "physical_phenomenon": "Disruptions in time structure of the signal",
         "gui_name": "Temporal discontinuities",
         "effects": ["Audio lagging", "Audio glitching", "Audio skipped/missed"],
-        "potential_human_qc_linking": "NA",
-    },
-    {
-        "artifact_family": "Temporal discontinuities",
-        "physical_phenomenon": "Disruptions in time structure of the signal",
-        "gui_name": "Any non-task related content",
-        "effects": [
-            "Extra or filler word",
-            "Missed word",
-            "Lip smacking/mouth sounds",
-            "Mouse clicking/keyboard noise",
-            "Laughing",
-            "Coughing",
-        ],
         "potential_human_qc_linking": "NA",
     },
 ]

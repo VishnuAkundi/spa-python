@@ -27,20 +27,20 @@ Each QC group column is stored as JSON text inside the CSV cell.
 | `onset_seconds_absolute` | Segment onset in seconds from the beginning of the original source file. |
 | `offset_seconds_absolute` | Segment offset in seconds from the beginning of the original source file. |
 | `duration_seconds` | Segment duration in seconds. |
-| `Environmental noise` | JSON dictionary for that QC group. Each effect is present. Values are `[]` or `[issue_onset_seconds_absolute, issue_offset_seconds_absolute]`. |
+| `Environmental noise` | JSON dictionary for that QC group. Each effect is present. Values are `[]` or a list of `[issue_onset_seconds_absolute, issue_offset_seconds_absolute]` windows. |
+| `Any non-task related content` | Same format. |
 | `Competing speech` | Same format. |
 | `Volume unstable` | Same format. |
 | `Clipping` | Same format. |
 | `Reverberation/echo` | Same format. |
 | `Platform effects` | Same format. |
 | `Temporal discontinuities` | Same format. |
-| `Any non-task related content` | Same format. |
 
 Example QC columns:
 
 ```json
 "Environmental noise": {
-  "Traffic": [2.55, 3.04],
+  "Traffic": [[2.55, 3.04], [6.10, 6.44]],
   "HVAC": [],
   "Pets": [],
   "TV (non-speech)": [],

@@ -126,6 +126,10 @@ If the segmentation looks wrong, click Back to return to boundary selection and
 adjust the noise or analysis region. If it looks acceptable, click Confirm
 Segmentation.
 
+From the review screen, use the Segment dropdown and Open Segment to jump
+directly to any detected segment. If you came to the review screen from a QC
+segment, use Return To Segment to go back to the exact segment you came from.
+
 ## 6. QC Audit
 
 The audit page walks through every detected segment in chronological order,
@@ -137,6 +141,12 @@ For each segment:
 2. Play the segment.
 3. Select any specific QC artifacts that apply.
 4. Click Next Segment.
+
+Use View Segmentation to jump back to the full segmentation review without
+losing the current segment's QC work. Use the Segment dropdown on any QC page to
+jump directly to another segment. The app saves the current segment's in-memory
+QC state before it navigates; unfinished issue-window clicks must be confirmed
+or reset first.
 
 The top plot shows the original amplitude waveform. The bottom plot is a
 time-aligned spectrogram for checking frequency structure such as formants. The
@@ -152,11 +162,26 @@ the current and later QC segments. Press Space to pause or resume segment
 playback.
 
 When you check a QC artifact, the app asks you to mark where that issue occurs.
-Click the issue start and end time on either QC plot, then click Confirm
-Boundary. Use Play Boundary to listen to the selected issue range before or
-after confirming it. You can still play, zoom, and change speed while setting
-the issue boundary. To undo the artifact, uncheck it. To adjust a saved artifact
-boundary, select it in the Issue Boundary dropdown and click Edit Boundary.
+Click the issue start and end time on either QC plot, then click Confirm.
+To add another window for the same artifact, select that artifact in
+the Issue Boundary dropdown and click Add/Reset. Add/Reset also clears an
+in-progress window if you clicked the wrong point and want to start that window
+again. Saved windows appear in the list below the dropdown. Select one window to
+Play, Edit Window, or Remove Window.
+
+QC boundary clicks are remembered while you zoom. For example, you can click the
+first issue boundary inside a zoomed view, reset or change the zoom, and then
+click the second issue boundary elsewhere in the segment before confirming.
+
+Each selected QC artifact also has a Show checkbox. Turning Show off hides that
+artifact's highlighted windows on the plots without removing the QC selection or
+changing the saved output. Use Show All or Hide All at the top of the QC panel
+to toggle every selected artifact at once.
+
+QC windows are colored by artifact group. For example, all Environmental noise
+windows use the same color, while Competing speech and Clipping use different
+colors. The currently selected saved window is drawn more strongly with a dark
+outline so it is clear which window will be played, edited, or removed.
 
 The group names are labels only. Select the specific artifact checkboxes under
 each group.
@@ -165,6 +190,8 @@ QC groups:
 
 - Environmental noise: Traffic, HVAC, Pets, TV (non-speech), Beep,
   Microphone rubbing, Non-specific environmental noise
+- Any non-task related content: Extra or filler word, Missed word,
+  Lip smacking/mouth sounds, Mouse clicking/keyboard noise, Laughing, Coughing
 - Competing speech: TV (speech), Other human speakers
 - Volume unstable: Volume too quiet, Volume too loud, Volume changes
 - Clipping: Crackling on loud syllables, Grainy, sandy, buzzing voice texture,
@@ -173,8 +200,6 @@ QC groups:
 - Platform effects: Muffled, filtered, telephone-like; Underwater, robotic,
   warbly, codec-like
 - Temporal discontinuities: Audio lagging, Audio glitching, Audio skipped/missed
-- Any non-task related content: Extra or filler word, Missed word,
-  Lip smacking/mouth sounds, Mouse clicking/keyboard noise, Laughing, Coughing
 
 Use Previous Segment to go back within the current file.
 

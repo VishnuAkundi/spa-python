@@ -166,10 +166,16 @@ def test_segment_audit_frame_uses_absolute_chronological_rows(tmp_path):
                     {
                         "gui_name": "Environmental noise",
                         "effect": "Traffic",
-                        "issue_region": {
-                            "onset_seconds_absolute": 0.3,
-                            "offset_seconds_absolute": 0.4,
-                        },
+                        "issue_regions": [
+                            {
+                                "onset_seconds_absolute": 0.3,
+                                "offset_seconds_absolute": 0.4,
+                            },
+                            {
+                                "onset_seconds_absolute": 0.5,
+                                "offset_seconds_absolute": 0.6,
+                            },
+                        ],
                     }
                 ],
             },
@@ -192,7 +198,7 @@ def test_segment_audit_frame_uses_absolute_chronological_rows(tmp_path):
     assert frame[QC_AUDIT_GUI_NAMES].notna().all().all()
 
     environmental = json.loads(frame.iloc[0]["Environmental noise"])
-    assert environmental["Traffic"] == [0.3, 0.4]
+    assert environmental["Traffic"] == [[0.3, 0.4], [0.5, 0.6]]
     assert environmental["HVAC"] == []
     assert set(environmental) >= {"Traffic", "HVAC", "Pets", "TV (non-speech)"}
 
