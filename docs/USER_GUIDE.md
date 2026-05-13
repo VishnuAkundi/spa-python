@@ -41,11 +41,12 @@ Recommended defaults:
 - SD multiplier: `3`
 - Speech minimum: `25 ms`
 - Pause minimum: `250 ms`
-- Analyze full file: off unless the protocol says to analyze the entire file
+- Analyze full file: on when Fixed segments is on
+- Fixed segments: on by default, which skips SPA and audits 5-second windows
 
 Use the Settings button in the top right if you need to change these later.
-Changing settings for a loaded file sends you back to the boundary-selection
-step so SPA can be rerun.
+Changing settings for a loaded file sends you back to the right review step. If
+Fixed segments is on, the app skips SPA and goes straight to the review screen.
 
 ## 3. Load Audio
 
@@ -65,13 +66,26 @@ You can override this with Choose Output Folder.
 The queue marks files as:
 
 - `PENDING`: no output CSV exists yet.
+- `IN PROGRESS`: the app found an autosaved progress file for this audio.
 - `DONE`: output CSV already exists in the selected output folder.
 
 Start Next Pending File opens the first unfinished file. Open Selected File lets
-you reopen any file. If the selected file is already done, the app opens the
-saved segmentation review page instead of making you reselect boundaries.
+you reopen any file. If the selected file is in progress, the app resumes the
+last saved step. If the selected file is already done, the app opens the saved
+segmentation review page instead of making you reselect boundaries.
+
+Temporary progress is saved under:
+
+```text
+<output folder>/progress_json/<file_stem>_progress.json
+```
+
+This file is removed automatically after Confirm And Save creates the final CSV.
 
 ## 4. Select Boundaries
+
+This page is skipped when Fixed segments is on. In that mode the full file is
+split into 5-second audit windows automatically.
 
 The boundary page shows two aligned plots:
 
@@ -103,14 +117,20 @@ current playback range. Press Space to pause or resume playback.
 
 Click Confirm And Run SPA when the selected regions look right.
 
+If the app quits while you are on this page, the current boundary selections are
+restored the next time you open the same file from the same output folder.
+
 ## 5. Review Segmentation
 
-The review page shows:
+In SPA mode, the review page shows:
 
 - normalized signal with threshold curve;
 - original waveform with detected speech and pause overlays;
 - speech count, pause count, and analysis start/end times;
 - Bamboo Passage text for reference.
+
+If Fixed segments is on, SPA is skipped. The review page instead shows dashed
+5-second boundaries on both the normalized signal and original waveform.
 
 Color guide:
 
@@ -118,13 +138,37 @@ Color guide:
 - threshold: red line;
 - detected speech: green overlay;
 - detected pause: blue overlay.
+- fixed 5-second boundaries: dashed dark vertical lines.
 
 Use Play Full Audio or Play Analysis Region if you need to listen again.
 Press Space to pause or resume playback.
 
-If the segmentation looks wrong, click Back to return to boundary selection and
-adjust the noise or analysis region. If it looks acceptable, click Confirm
-Segmentation.
+The right side of the review page has File-Level QC. Use this when an issue is
+present throughout the file or across a large chunk of the file:
+
+1. Check the specific QC artifact.
+2. Choose Whole File, or click Add/Reset and then click the issue start/end on
+   either review plot.
+3. Click Confirm for selected windows.
+
+These file-level QC selections are copied into the later segment-by-segment QC
+pages. Whole-file selections appear on every segment; large-window selections
+appear only on segments whose time range overlaps that window.
+
+File-level QC windows can be hidden without deleting them. Use each artifact's
+Show checkbox, or Show All / Hide All at the top of the File-Level QC panel.
+
+To inspect a smaller part of the review plots, click Select Zoom, then click the
+zoom start and end time on either review plot. Use Play Zoom to listen only to
+that window, or Reset Zoom to return to the full review view.
+
+If the SPA segmentation looks wrong, click Back to return to boundary selection
+and adjust the noise or analysis region. In fixed-window mode, Back returns to
+the Load Audio page. If it looks acceptable, click Confirm Segmentation.
+
+Review-page file-level QC selections are autosaved. If the app quits before the
+final save, reopen the same queue and output folder, then open the file marked
+`IN PROGRESS`.
 
 From the review screen, use the Segment dropdown and Open Segment to jump
 directly to any detected segment. If you came to the review screen from a QC
@@ -132,8 +176,9 @@ segment, use Return To Segment to go back to the exact segment you came from.
 
 ## 6. QC Audit
 
-The audit page walks through every detected segment in chronological order,
-including both speech and pause segments.
+The audit page walks through every segment in chronological order. In SPA mode
+that includes both speech and pause segments. In fixed-window mode that includes
+the 5-second audit windows.
 
 For each segment:
 
@@ -203,6 +248,10 @@ QC groups:
 
 Use Previous Segment to go back within the current file.
 
+Segment QC selections are autosaved as you move through the audit. If the app
+quits, reopen the file marked `IN PROGRESS`; it returns to the last saved step
+for that file.
+
 ## 7. Save
 
 At the final page, click Confirm And Save. The app saves automatically. There is
@@ -215,6 +264,9 @@ After saving:
 
 You can reopen any done file from the Load Audio page to inspect saved
 segmentation and QC selections.
+
+The final save removes that file's temporary progress JSON. The final CSV and
+metadata JSON remain.
 
 ## Supported Inputs
 
@@ -243,3 +295,7 @@ before headphones or speakers were connected, restart the app.
 Done files are not showing as done:
 Make sure the output folder selected on the Load Audio page is the same folder
 that contains the previous `<file_stem>_segments.csv` files.
+
+In-progress files are not resuming:
+Make sure the output folder selected on the Load Audio page is the same folder
+that contains `progress_json/<file_stem>_progress.json`.

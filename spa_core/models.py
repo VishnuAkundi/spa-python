@@ -24,6 +24,8 @@ class SpaSettings:
     time_increment_ms: float = 25.0
     plot_graph: bool = True
     use_full_file: bool = False
+    use_fixed_segments: bool = False
+    fixed_segment_seconds: float = 5.0
     passage_word_count: int = 97
 
 
@@ -73,7 +75,11 @@ class SpaResult:
     total_matrix: pd.DataFrame
     speech_events_samples: np.ndarray
     pause_events_samples: np.ndarray
+    fixed_events_samples: Optional[np.ndarray] = None
+    segmentation_mode: str = "spa"  # spa | fixed
 
     @property
     def has_events(self) -> bool:
-        return not self.speech_matrix.empty or not self.pause_matrix.empty
+        has_fixed = self.fixed_events_samples is not None and len(self.fixed_events_samples) > 0
+        has_spa_events = len(self.speech_events_samples) > 0 or len(self.pause_events_samples) > 0
+        return has_fixed or has_spa_events or not self.speech_matrix.empty or not self.pause_matrix.empty

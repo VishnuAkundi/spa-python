@@ -12,9 +12,16 @@ It also writes one metadata JSON per processed file:
 <output folder>/metadata_json/<file_stem>_segments_meta.json
 ```
 
+While a file is unfinished, the app also writes a temporary progress JSON:
+
+```text
+<output folder>/progress_json/<file_stem>_progress.json
+```
+
 ## Segment CSV
 
-Rows are chronological and include both speech and pause segments.
+Rows are chronological. SPA mode includes speech and pause segments. Fixed-window
+mode includes fixed audit segments.
 Each QC group column is stored as JSON text inside the CSV cell.
 
 | Column | Meaning |
@@ -22,7 +29,7 @@ Each QC group column is stored as JSON text inside the CSV cell.
 | `file_name` | Source file name only. |
 | `source_path` | Full path to the source file used for review. |
 | `segment_number` | Chronological segment number within the file. |
-| `segment_type` | `speech` or `pause`. |
+| `segment_type` | `speech`, `pause`, or `fixed`. `fixed` means the app skipped SPA and split the file into 5-second audit windows. |
 | `pause_position` | `leading`, `trailing`, `leading_trailing`, or `0`. Only pause rows can be flagged. |
 | `onset_seconds_absolute` | Segment onset in seconds from the beginning of the original source file. |
 | `offset_seconds_absolute` | Segment offset in seconds from the beginning of the original source file. |
@@ -67,7 +74,7 @@ an empty list:
 - `leading`: first chronological segment is a pause.
 - `trailing`: last chronological segment is a pause.
 - `leading_trailing`: the only segment is a pause.
-- `0`: not an edge pause, or the row is speech.
+- `0`: not an edge pause, or the row is speech/fixed.
 
 ## Metadata JSON
 
@@ -81,7 +88,23 @@ Fields:
 - `sample_rate`
 - `noise_region_samples`
 - `analysis_region_samples`
+- `file_level_qc`: review-page QC selections that are projected into individual segment rows.
 - `settings`
 
-The CSV is the primary analysis output. The JSON is app state needed for resume
-and review.
+The CSV is the primary analysis output. The metadata JSON is completed-file app
+state needed for review.
+
+## Temporary Progress JSON
+
+The progress JSON is an autosave for interrupted files. It can include:
+
+- current wizard page;
+- selected noise and analysis boundaries;
+- segmentation mode and detected segment boundaries;
+- file-level QC selections;
+- segment-by-segment QC selections already entered;
+- current audit segment index.
+
+Progress JSON files are not final analysis outputs. They are deleted
+automatically once Confirm And Save successfully writes the final CSV for that
+file.

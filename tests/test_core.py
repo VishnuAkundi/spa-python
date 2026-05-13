@@ -6,11 +6,12 @@ import shutil
 import subprocess
 
 import numpy as np
+import pandas as pd
 from scipy.io import wavfile
 
 from spa_core.audio import has_audio_stream, iter_audio_files, read_wav
 from spa_core.export import SEGMENT_AUDIT_COLUMNS, export_excel, segment_audit_frame
-from spa_core.models import SpaSettings
+from spa_core.models import SpaResult, SpaSettings
 from spa_core.processing import amplitude_envelope
 from spa_core.qc_schema import QC_AUDIT_GUI_NAMES
 from spa_core.segmentation import detect_events, run_spa
@@ -204,3 +205,49 @@ def test_segment_audit_frame_uses_absolute_chronological_rows(tmp_path):
 
     competing = json.loads(frame.iloc[0]["Competing speech"])
     assert competing == {"Other human speakers": [], "TV (speech)": []}
+
+
+def test_segment_audit_frame_exports_fixed_segments(tmp_path):
+    result = SpaResult(
+        settings=SpaSettings(use_fixed_segments=True, fixed_segment_seconds=5.0),
+        signal_path=tmp_path / "sample.wav",
+        sample_rate=10,
+        bit_depth=16,
+        analysis_region=(0, 105),
+        noise_region=None,
+        threshold_curve=np.full(105, np.nan),
+        threshold_by_iteration={},
+        speech_matrix=pd.DataFrame(),
+        pause_matrix=pd.DataFrame(),
+        total_matrix=pd.DataFrame(),
+        speech_events_samples=np.empty((0, 2), dtype=int),
+        pause_events_samples=np.empty((0, 2), dtype=int),
+        fixed_events_samples=np.asarray([[0, 50], [50, 100], [100, 105]], dtype=int),
+        segmentation_mode="fixed",
+    )
+
+    frame = segment_audit_frame(
+        result,
+        {
+            1: {
+                "selected_effects": [
+                    {
+                        "gui_name": "Environmental noise",
+                        "effect": "Pets",
+                        "issue_regions": [
+                            {
+                                "onset_seconds_absolute": 1.0,
+                                "offset_seconds_absolute": 2.0,
+                            }
+                        ],
+                    }
+                ],
+            }
+        },
+    )
+
+    assert list(frame["segment_type"]) == ["fixed", "fixed", "fixed"]
+    assert list(frame["duration_seconds"]) == [5.0, 5.0, 0.5]
+    assert set(frame["pause_position"]) == {0}
+    environmental = json.loads(frame.iloc[0]["Environmental noise"])
+    assert environmental["Pets"] == [[1.0, 2.0]]

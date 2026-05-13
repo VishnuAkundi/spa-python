@@ -8,9 +8,10 @@ The app lets you:
 - choose SPA settings once per session;
 - load one audio file, multiple audio files, or a folder of audio/media files;
 - select a noise-only region and an analysis region;
-- review detected speech and pause segments;
-- QC-audit every detected speech and pause segment;
-- automatically save CSV outputs and metadata beside the audio files.
+- review detected speech/pause segments or fixed 5-second audit windows;
+- QC-audit every segment;
+- automatically save CSV outputs and metadata beside the audio files;
+- resume interrupted files from autosaved temporary progress.
 
 ## Quick Start
 
@@ -51,10 +52,14 @@ selected audio folder. Each processed source file gets:
 
 - `<file_stem>_segments.csv`
 - `metadata_json/<file_stem>_segments_meta.json`
+- `progress_json/<file_stem>_progress.json` while a file is still in progress
 
-The CSV includes chronological speech and pause rows, absolute onset/offset
-times, pause-position flags, and one QC audit column per GUI group. See
+The CSV includes chronological segment rows, absolute onset/offset times,
+pause-position flags for SPA pause rows, and one QC audit column per GUI group. See
 [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md).
+
+Progress JSON files are temporary autosaves. They are removed automatically after
+the final CSV is saved for that file.
 
 ## Development Checks
 
@@ -80,7 +85,8 @@ Included in the Python app:
 - guided single-file and folder-queue workflow;
 - automatic static/adaptive SPA thresholding;
 - MATLAB-style preprocessing and event boundary rules;
-- speech and pause QC audit;
+- optional fixed 5-second audit segments that skip SPA;
+- speech, pause, and fixed-window QC audit;
 - automatic CSV and JSON metadata output;
 - saved-output review and rerun support.
 

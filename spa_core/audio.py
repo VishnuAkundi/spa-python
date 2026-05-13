@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
+import atexit
 import shutil
 import subprocess
+import sys
+import tempfile
 from pathlib import Path
 from typing import Iterable
 
@@ -28,6 +32,9 @@ SKIP_SCAN_DIR_NAMES = {
     "metadata_json",
     "reports",
 }
+_PLAYBACK_PROCESS: subprocess.Popen | None = None
+_PLAYBACK_TEMP_PATH: Path | None = None
+_SOUNDDEVICE_ACTIVE = False
 
 
 def _bit_depth_from_dtype(dtype: np.dtype) -> int:
@@ -290,18 +297,109 @@ def export_speech_segments(
     return written
 
 
-def play_audio(audio: np.ndarray, sample_rate: int) -> None:
+def _cleanup_playback_temp() -> None:
+    global _PLAYBACK_TEMP_PATH
+    if _PLAYBACK_TEMP_PATH is None:
+        return
+    try:
+        _PLAYBACK_TEMP_PATH.unlink(missing_ok=True)
+    except OSError:
+        pass
+    _PLAYBACK_TEMP_PATH = None
+
+
+def _stop_playback_process() -> None:
+    global _PLAYBACK_PROCESS
+    if _PLAYBACK_PROCESS is None:
+        return
+    process = _PLAYBACK_PROCESS
+    _PLAYBACK_PROCESS = None
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=1.0)
+
+
+def _subprocess_audio_backend() -> str | None:
+    requested = os.environ.get("SPA_AUDIO_BACKEND", "").strip().lower()
+    if requested in {"afplay", "ffplay", "sounddevice"}:
+        if requested == "sounddevice":
+            return None
+        executable = shutil.which(requested)
+        if executable is None:
+            raise RuntimeError(f"SPA_AUDIO_BACKEND is set to {requested}, but `{requested}` was not found on PATH.")
+        return executable
+    if sys.platform == "darwin":
+        return shutil.which("afplay") or shutil.which("ffplay")
+    return shutil.which("ffplay")
+
+
+def _play_audio_subprocess(audio: np.ndarray, sample_rate: int, executable: str) -> None:
+    global _PLAYBACK_PROCESS, _PLAYBACK_TEMP_PATH
+    handle = tempfile.NamedTemporaryFile(prefix="spa_playback_", suffix=".wav", delete=False)
+    temp_path = Path(handle.name)
+    handle.close()
+    try:
+        write_wav(temp_path, audio, int(sample_rate), bit_depth=16)
+        player = Path(executable).name.lower()
+        if player == "afplay":
+            command = [executable, str(temp_path)]
+        else:
+            command = [executable, "-nodisp", "-autoexit", "-loglevel", "error", str(temp_path)]
+        kwargs = {
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+        }
+        if hasattr(subprocess, "CREATE_NO_WINDOW"):
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        _PLAYBACK_TEMP_PATH = temp_path
+        _PLAYBACK_PROCESS = subprocess.Popen(command, **kwargs)
+    except Exception:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
+def _play_audio_sounddevice(audio: np.ndarray, sample_rate: int) -> None:
+    global _SOUNDDEVICE_ACTIVE
     try:
         import sounddevice as sd
     except Exception as exc:  # pragma: no cover - depends on optional local audio stack
         raise RuntimeError("sounddevice is not installed; install requirements.txt to enable playback.") from exc
     sd.stop()
     sd.play(np.asarray(audio, dtype=float), sample_rate)
+    _SOUNDDEVICE_ACTIVE = True
+
+
+def play_audio(audio: np.ndarray, sample_rate: int) -> None:
+    stop_audio()
+    executable = _subprocess_audio_backend()
+    if executable is not None:
+        _play_audio_subprocess(np.asarray(audio, dtype=float), int(sample_rate), executable)
+        return
+    _play_audio_sounddevice(audio, sample_rate)
 
 
 def stop_audio() -> None:
+    global _SOUNDDEVICE_ACTIVE
+    _stop_playback_process()
+    _cleanup_playback_temp()
+    if not _SOUNDDEVICE_ACTIVE:
+        return
     try:
         import sounddevice as sd
-    except Exception as exc:  # pragma: no cover - depends on optional local audio stack
-        raise RuntimeError("sounddevice is not installed; install requirements.txt to enable playback.") from exc
-    sd.stop()
+    except Exception:
+        _SOUNDDEVICE_ACTIVE = False
+        return
+    try:
+        sd.stop()
+    finally:
+        _SOUNDDEVICE_ACTIVE = False
+
+
+atexit.register(stop_audio)

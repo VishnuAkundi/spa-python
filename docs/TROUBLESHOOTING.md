@@ -36,15 +36,25 @@ audio stream.
 
 ## Playback Does Not Work
 
-Playback uses `sounddevice`. Try:
+On macOS, playback uses the system `afplay` command so changing or disconnecting
+headphones does not crash the app through PortAudio. On other systems, playback
+uses `ffplay` when available, then falls back to `sounddevice`.
+
+Try:
 
 1. Confirm the computer has a working audio output.
-2. Connect headphones or speakers before starting the app.
-3. Restart the app.
-4. Run `python -m pip check` to confirm dependencies are consistent.
+2. If headphones or speakers were just changed, click Stop if a Play button is active.
+3. Select the new system output device in the operating system sound settings.
+4. Press Play again.
+5. Restart the app if the operating system itself has not released the old audio route.
+6. Run `python -m pip check` to confirm dependencies are consistent.
 
 Space pauses or resumes the current playback range on pages that have audio
 playback. In the QC page, the Speed control changes how fast segments play.
+
+Advanced override: set `SPA_AUDIO_BACKEND=sounddevice`, `SPA_AUDIO_BACKEND=afplay`,
+or `SPA_AUDIO_BACKEND=ffplay` before starting the app to force one playback
+backend.
 
 ## The Segmentation Looks Like Everything Is Speech
 
@@ -68,6 +78,18 @@ The app checks for:
 
 Make sure the Output Folder on the Load Audio page is the same folder that was
 used previously.
+
+## In-Progress Files Are Not Resuming
+
+The app checks for:
+
+```text
+<output folder>/progress_json/<file_stem>_progress.json
+```
+
+Use the same Output Folder that was selected when the file was being reviewed.
+After Confirm And Save, this progress file is removed because the final CSV is
+now the source of truth.
 
 ## A Done File Opens But Boundaries Look Wrong
 

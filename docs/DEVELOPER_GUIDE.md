@@ -9,7 +9,8 @@ run_spa.py
   Starts the PySide6 GUI.
 
 spa_app/main_window.py
-  Wizard interface, playback controls, saved-output resume behavior, QC audit UI.
+  Wizard interface, playback controls, temporary progress autosave, saved-output
+  resume behavior, QC audit UI.
 
 spa_core/audio.py
   Audio reading/writing, ffprobe/ffmpeg fallback decoding, bit-depth handling,
@@ -24,6 +25,8 @@ spa_core/thresholds.py
 
 spa_core/segmentation.py
   MATLAB-equivalent event boundary rules, duration filtering, summary matrices.
+  The optional fixed 5-second audit-window mode is built in the GUI layer and
+  does not call `run_spa`.
 
 spa_core/export.py
   MATLAB-style Excel export and RA segment-audit CSV export.

@@ -84,7 +84,7 @@ def export_excel(result: SpaResult, output_path: str | Path, append: bool = Fals
 
 
 def segment_audit_frame(result: SpaResult, audit_by_segment_number: dict[int, dict] | None = None) -> pd.DataFrame:
-    """Build a compact chronological speech/pause segment table for RA audit."""
+    """Build a compact chronological segment table for RA audit."""
 
     audit_by_segment_number = audit_by_segment_number or {}
     analysis_start = int(result.analysis_region[0])
@@ -110,9 +110,14 @@ def segment_audit_frame(result: SpaResult, audit_by_segment_number: dict[int, di
                 }
             )
 
-    add_rows(result.speech_events_samples, "speech")
-    add_rows(result.pause_events_samples, "pause")
-    rows.sort(key=lambda row: (float(row["_absolute_start_sample"]), 0 if row["segment_type"] == "speech" else 1))
+    fixed_events = result.fixed_events_samples
+    if fixed_events is not None and len(fixed_events) > 0:
+        add_rows(fixed_events, "fixed")
+    else:
+        add_rows(result.speech_events_samples, "speech")
+        add_rows(result.pause_events_samples, "pause")
+    type_order = {"speech": 0, "fixed": 0, "pause": 1}
+    rows.sort(key=lambda row: (float(row["_absolute_start_sample"]), type_order.get(str(row["segment_type"]), 9)))
     for segment_number, row in enumerate(rows, start=1):
         row["segment_number"] = segment_number
         row.update(audit_group_columns(audit_by_segment_number.get(segment_number, {"selected_effects": []})))
