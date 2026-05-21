@@ -32,11 +32,11 @@ QC_AUDIT_COLORS = {
 }
 BAMBOO_PASSAGE = (
     "Bamboo walls are getting to be very popular. They are strong, easy to use, and good-looking. "
-    "They provide a good background and can create a look of a Japanese garden. Bamboo is a grass, "
-    "and is one of the most rapidly growing grasses in the world. Many varieties of bamboo are grown "
-    "in Asia, although it is also grown in America. Last year we bought a new home and have been "
-    "working on the flower garden. In a few more days, we will be done with the bamboo wall in our "
-    "garden. We have really enjoyed the project."
+    "They provide a good background and can create a look of a Japanese garden. Bamboo is one of the "
+    "largest and most rapidly growing grasses all over the world. Many varieties of bamboo are grown in "
+    "Asia, although it is also grown in America. Last year we bought a new home and have been working "
+    "on the flower garden. In a few more days, we will be done with the bamboo wall in our garden. "
+    "We have really enjoyed the project."
 )
 
 _MPL_CONFIG_DIR = PROJECT_ROOT / ".matplotlib"
